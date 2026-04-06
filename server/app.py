@@ -53,8 +53,11 @@ app = create_app(
     max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
 )
 
+HOST = "0.0.0.0"
+PORT = 8000
 
-def main(host: str = "0.0.0.0", port: int = 8000):
+
+def main():
     """
     Entry point for direct execution via uv run or python -m.
 
@@ -73,13 +76,28 @@ def main(host: str = "0.0.0.0", port: int = 8000):
     """
     import uvicorn
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=HOST, port=PORT)
+
+
+def cli():
+    import argparse
+    import os
+
+    global HOST, PORT
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+
+    HOST = args.host
+    PORT = args.port
+
+    if os.getenv("PORT"):
+        PORT = int(os.getenv("PORT"))
+
+    main()
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    main(port=args.port)
+    cli()

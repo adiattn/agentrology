@@ -17,11 +17,17 @@ from pydantic import Field
 class AgentrologyAction(Action):
     """Action for the Agentrology environment - just a message to echo."""
 
-    message: str = Field(..., description="Message to echo back")
+    command: str = Field(
+        ...,
+        description="The shell command to execute (e.g., 'ps aux', 'kill -9 <PID>', 'crontab -r')",
+    )
 
 
 class AgentrologyObservation(Observation):
     """Observation from the Agentrology environment - the echoed message."""
 
-    echoed_message: str = Field(default="", description="The echoed message")
-    message_length: int = Field(default=0, description="Length of the echoed message")
+    stdout: str = Field(..., description="Standard output from the executed command")
+    stderr: str = Field(..., description="Error output, if any")
+    active_threats: int = Field(
+        ..., description="Number of policy-violating threats remaining"
+    )

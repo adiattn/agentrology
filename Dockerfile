@@ -17,8 +17,8 @@ WORKDIR /app
 
 # Ensure git is available (required for installing dependencies from VCS)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y --no-install-recommends git && \
+  rm -rf /var/lib/apt/lists/*
 
 # Build argument to control whether we're building standalone or in-repo
 ARG BUILD_MODE=in-repo
@@ -33,31 +33,43 @@ WORKDIR /app/env
 
 # Ensure uv is available (for local builds where base image lacks it)
 RUN if ! command -v uv >/dev/null 2>&1; then \
-        curl -LsSf https://astral.sh/uv/install.sh | sh && \
-        mv /root/.local/bin/uv /usr/local/bin/uv && \
-        mv /root/.local/bin/uvx /usr/local/bin/uvx; \
-    fi
-    
+  curl -LsSf https://astral.sh/uv/install.sh | sh && \
+  mv /root/.local/bin/uv /usr/local/bin/uv && \
+  mv /root/.local/bin/uvx /usr/local/bin/uvx; \
+  fi
+
 # Install dependencies using uv sync
 # If uv.lock exists, use it; otherwise resolve on the fly
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f uv.lock ]; then \
-        uv sync --frozen --no-install-project --no-editable; \
-    else \
-        uv sync --no-install-project --no-editable; \
-    fi
+  if [ -f uv.lock ]; then \
+  uv sync --frozen --no-install-project --no-editable; \
+  else \
+  uv sync --no-install-project --no-editable; \
+  fi
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f uv.lock ]; then \
-        uv sync --frozen --no-editable; \
-    else \
-        uv sync --no-editable; \
-    fi
+  if [ -f uv.lock ]; then \
+  uv sync --frozen --no-editable; \
+  else \
+  uv sync --no-editable; \
+  fi
 
 # Final runtime stage
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
+
+# INSTALL LINUX SECURITY & SYSADMIN UTILITIES
+# This is required for the Agentrology to function properly.
+USER root
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends \
+  procps \
+  net-tools \
+  lsof \
+  cron \
+  iproute2 \
+  && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from builder
 COPY --from=builder /app/env/.venv /app/.venv
@@ -73,8 +85,8 @@ ENV PYTHONPATH="/app/env:$PYTHONPATH"
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+  CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the FastAPI server
+# Run the FastAPI server AND start the cron daemon for Task 3
 # The module path is constructed to work with the /app/env structure
-CMD ["sh", "-c", "cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "service cron start && cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000"]

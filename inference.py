@@ -47,16 +47,18 @@ import os
 import textwrap
 from typing import List, Optional
 
-from my_env_v4 import MyEnvV4Action, MyEnvV4Env
 from openai import OpenAI
 
-IMAGE_NAME = os.getenv("IMAGE_NAME")  # If you are using docker image
+from client import AgentrologyEnv
+from models import AgentrologyAction
+
+IMAGE_NAME = os.getenv("IMAGE_NAME") or "agentrology-env:latest"
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
-TASK_NAME = os.getenv("MY_ENV_V4_TASK", "echo")
-BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "my_env_v4")
+TASK_NAME = os.getenv("AGENTROLOGY_TASK", "agentrology-task")
+BENCHMARK = os.getenv("BENCHMARK", "agentrology-benchmark")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
 MAX_TOKENS = 150
@@ -137,7 +139,7 @@ def get_model_message(
 async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    env = await MyEnvV4Env.from_docker_image(IMAGE_NAME)
+    env = await AgentrologyEnv.from_docker_image(IMAGE_NAME)
 
     history: List[str] = []
     rewards: List[float] = []
@@ -158,7 +160,7 @@ async def main() -> None:
 
             message = get_model_message(client, step, last_echoed, last_reward, history)
 
-            result = await env.step(MyEnvV4Action(message=message))
+            result = await env.step(AgentrologyAction(message=message))
             obs = result.observation
 
             reward = result.reward or 0.0
