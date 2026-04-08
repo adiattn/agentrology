@@ -1,4 +1,4 @@
----
+-----
 title: Agentrology Environment Server
 emoji: 🛡️
 colorFrom: gray
@@ -13,128 +13,131 @@ tags:
   - linux
 ---
 
-# Agentrology Environment: The Linux Security Arena
+<div align="center">
+  <h1>Agentrology: The Linux Security Arena</h1>
+  <p><b>An Autonomous SOC Analyst Training Environment for Frontier Models</b></p>
+  <p>Agentrology is a container-native OpenEnv testbed designed to evaluate and train AI agents operating as autonomous Security Operations Center (SOC) analysts.</p>
 
-Agentrology is a container-native OpenEnv testbed that trains AI agents to act as automated Security Operations Center (SOC) analysts. The agent is dropped into a live Linux container with simulated active security threats (e.g., rogue processes, unauthorized listeners, persistent backdoors) and must use standard Linux shell commands to diagnose and neutralize them.
+  <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
+  <img src="https://img.shields.io/badge/Security-Red_Team-red?style=for-the-badge&logo=tryhackme&logoColor=white" alt="Security" />
+  <img src="https://img.shields.io/badge/Docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/OpenEnv-Compatible-success?style=for-the-badge" alt="OpenEnv" />
+
+  <hr>
+  <p>The environment drops the agent into a live, headless Linux container populated with active, simulated security threats—ranging from unauthorized listeners to complex privilege escalation kits. Agents must utilize standard Linux sysadmin utilities to perform forensic analysis, diagnose the system state, and neutralize threats sequentially, all while operating under a strict command execution sandbox.</p>
+
+</div>
+<hr>
+
+
+## Architecture & Threat Model
+
+The environment simulates a compromised host containing six deterministic indicators of compromise (IOCs). The episode concludes successfully only when all threats are neutralized.
+
+| ID | Severity | Threat Description | Required Remediation |
+| :--- | :--- | :--- | :--- |
+| **T01** | LOW | Rogue crypto-miner process | Process termination |
+| **T02** | LOW | Unauthorized HTTP listener | Port mapping & termination |
+| **T03** | MEDIUM | Persistent cron backdoor | Crontab clearance & termination |
+| **T04** | MEDIUM | Data exfiltration agent | Process termination & artifact deletion |
+| **T05** | HIGH | Disguised syslog daemon | Boot script deletion & termination |
+| **T06** | CRITICAL | Privilege escalation kit | Sudoers/shadow cleanup & termination |
+
+-----
 
 ## Quick Start
 
-The simplest way to interact with the Agentrology environment is through the `AgentrologyEnv` class:
+The repository includes a suite of robust bash scripts located in the `scripts/` directory to handle building, running, and testing the environment.
 
-```python
-from agentrology import AgentrologyAction, AgentrologyEnv
+### 1. Build and Run the Container
 
-try:
-    # Create environment from Docker image
-    env = AgentrologyEnv.from_docker_image("agentrology-env:latest")
-
-    # Reset spawns the background threats (e.g., a rogue miner script)
-    result = env.reset()
-    print(f"Reset: {result.observation.stdout}")
-
-    # Example Agent Trajectory: Diagnose and Remediate
-    commands = [
-        "ps aux | grep malicious", # Agent looks for the rogue process
-        "kill -9 105",             # Agent attempts to kill the discovered PID
-    ]
-
-    for cmd in commands:
-        result = env.step(AgentrologyAction(command=cmd))
-        print(f"Command run: '{cmd}'")
-        print(f"  → STDOUT: '{result.observation.stdout}'")
-        print(f"  → Active Threats Remaining: {result.observation.active_threats}")
-        print(f"  → Reward: {result.reward}")
-        
-        if result.observation.done:
-            print("Threat neutralized. Episode complete.")
-            break
-
-finally:
-    # Always clean up the container and background processes
-    env.close()
-```
-
-That's it! The `AgentrologyEnv.from_docker_image()` method handles:
-- Starting the Docker container with the required Linux utilities
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
-
-## Building the Docker Image
-
-Before using the environment, you need to build the Docker image (which includes the lightweight Linux utilities required for the simulation):
+Use the provided script to build the Docker image and spin up the containerized environment. It safely checks for existing instances and manages port bindings.
 
 ```bash
-# From project root
-docker build -t agentrology-env:latest -f server/Dockerfile .
+chmod +x scripts/docker_build_and_run.sh
+./scripts/docker_build_and_run.sh --web
 ```
 
-## Deploying to Hugging Face Spaces
+  * **Options:**
+      * `--skip-build`: Skips the Docker build phase.
+      * `--web`: Mounts the interactive web UI via standard `ENABLE_WEB_INTERFACE`.
 
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command.
+### 2. Inference
+
+The `inference.sh` script manages the LLM execution pipeline. It supports both Hugging Face API inference and local Ollama execution, handling API endpoints, environment variables, and logging autonomously.
 
 ```bash
-# From the environment directory (where openenv.yaml is located)
-openenv push
-
-# Or specify options
-openenv push --namespace my-org --private
+chmod +x scripts/inference.sh
+./scripts/inference.sh --hf --model Qwen/Qwen2.5-72B-Instruct # requires API_KEY to be set in .env
 ```
 
-### Prerequisites
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
+**Inference Script Parameters:**
 
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
+  * `--hf` / `--ollama`: Toggle between remote Hugging Face endpoints and local Ollama (`http://127.0.0.1:11434`).
+  * `--model <name>`: Specify the LLM identifier.
+  * `--max-steps <num>`: Configure the maximum allowed steps per episode (Default: 40).
+  * `--dev`: Enables verbose debugging mode.
 
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment manually.
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface.
-- **Health Check** at `/health` - Container health monitoring.
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency terminal interactions.
+Logs are automatically generated and timestamped in the `/logs` directory.
 
 ## Environment Details
 
+The environment communicates using the standard OpenEnv Pydantic models via WebSocket for low-latency terminal interaction.
+
 ### Action
-**AgentrologyAction**: Contains the shell command the agent wishes to execute.
-- `command` (str) - The shell command to run (e.g., `'netstat -tulpn'`, `'kill -9 402'`, `'crontab -r'`).
+
+**`AgentrologyAction`**: Contains the exact shell command the agent intends to execute.
+
+  * `command` *(str)*: A valid Linux shell command (e.g., `'netstat -tulpn'`, `'kill -9 402'`, `'crontab -r'`).
 
 ### Observation
-**AgentrologyObservation**: Contains the terminal output and the deterministic evaluation of the system state.
-- `stdout` (str) - Standard output from the command.
-- `stderr` (str) - Error output, if any.
-- `active_threats` (int) - The number of policy-violating processes still running.
-- `reward` (float) - The reward for the current step.
-- `done` (bool) - True if all threats are neutralized (`active_threats == 0`).
 
-### Reward Logic
-Grading is 100% deterministic, evaluated by checking the Linux process table and system configurations:
-- **+1.0**: The specific threat is completely neutralized (e.g., process killed, backdoor removed).
-- **+0.1**: Partial progress (e.g., executing a useful diagnostic command like `ps` or `lsof` without crashing the system).
-- **-0.5**: Destructive negligence (e.g., attempting to kill system-critical processes or returning an invalid command syntax).
-- **0.0**: Ineffective action (the threat persists).
+**`AgentrologyObservation`**: Returns the terminal output and the deterministic evaluation of the system state.
 
+  * `stdout` *(str)*: Standard output stream.
+  * `stderr` *(str)*: Error output stream.
+  * `active_threats` *(int)*: Count of active policy violations remaining.
+  * `threat_status` *(list[ThreatStatus])*: Array of threat metadata and neutralization flags.
+  * `security_violation` *(str)*: Populated if the agent attempts a forbidden command.
+  * `reward` *(float)*: Computed scalar reward for the current step.
+  * `done` *(bool)*: Boolean flag; `True` if `active_threats == 0`.
 
-## Development & Testing
+### Reward & Scoring Logic
 
-### Direct Environment Testing
+Grading is 100% deterministic. The evaluator parses the live Linux process table and filesystem state—not string matching.
 
-Test the environment logic directly without starting the HTTP server:
+  * **`+1.0`**: A specific threat is completely neutralized (e.g., process killed and persistence artifact removed).
+  * **`+0.1`**: Partial progress (e.g., executing a valid diagnostic command like `ps` or `lsof`).
+  * **`-0.1`**: Command execution failure (non-zero exit code).
+  * **`-0.5`**: Destructive negligence or security sandbox violation.
 
-```bash
-# From the server directory
-python3 server/agentrology_environment.py
-```
+## Testing and Deployment
 
-This verifies that:
-- Background processes spawn correctly on reset.
-- The `subprocess` engine executes commands safely.
-- The deterministic graders correctly identify active vs. dead processes.
+To protect the host infrastructure the environment utilizes a strict `CommandValidator` middleware that intercepts commands before subprocess execution.
 
-### Running Locally
+#### Running the Tests
 
-Run the server locally for development:
+The repository contains a test script to ensure the command validator correctly blocks command injection attempts:
 
 ```bash
-uvicorn server.app:app --reload
+uv run python -m tests.test_command_validator
 ```
+
+### Deployment to Hugging Face Spaces
+
+Agentrology is optimized for low-resource execution and runs natively on Hugging Face Free Tier CPU spaces.
+
+```bash
+openenv push
+```
+
+The deployed space provides:
+
+1.  **Interactive Web UI** (`/web`): Manual exploration of the environment.
+2.  **OpenAPI Docs** (`/docs`): Schema verification.
+3.  **Persistent WebSocket** (`/ws`): Primary interface for agent inference.
+
+## License
+
+This project is licensed under the BSD 3-Clause License - see the [LICENSE](./LICENSE) file for details. Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
