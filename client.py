@@ -15,9 +15,7 @@ from openenv.core.env_server.types import State
 from models import AgentrologyAction, AgentrologyObservation
 
 
-class AgentrologyEnv(
-    EnvClient[AgentrologyAction, AgentrologyObservation, State]
-):
+class AgentrologyEnv(EnvClient[AgentrologyAction, AgentrologyObservation, State]):
     """
     Client for the Agentrology Environment.
 
@@ -55,7 +53,7 @@ class AgentrologyEnv(
             Dictionary representation suitable for JSON encoding
         """
         return {
-            "message": action.message,
+            "command": action.command,
         }
 
     def _parse_result(self, payload: Dict) -> StepResult[AgentrologyObservation]:
@@ -70,16 +68,19 @@ class AgentrologyEnv(
         """
         obs_data = payload.get("observation", {})
         observation = AgentrologyObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
+            stdout=obs_data.get("stdout", ""),
+            stderr=obs_data.get("stderr", ""),
+            active_threats=obs_data.get("active_threats", 6),
+            reward=payload.get("reward", 0.0),
             done=payload.get("done", False),
-            reward=payload.get("reward"),
+            threat_status=obs_data.get("threat_status", []),
+            security_violation=obs_data.get("security_violation", ""),
             metadata=obs_data.get("metadata", {}),
         )
 
         return StepResult(
             observation=observation,
-            reward=payload.get("reward"),
+            reward=payload.get("reward", 0.0),
             done=payload.get("done", False),
         )
 

@@ -4,6 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 """
 FastAPI application for the Agentrology Environment.
 
@@ -27,6 +28,8 @@ Usage:
     # Or run directly:
     python -m server.app
 """
+
+import os
 
 try:
     from openenv.core.env_server.http_server import create_app
@@ -52,6 +55,20 @@ app = create_app(
     env_name="agentrology",
     max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
 )
+
+
+IS_DEVELOPMENT = os.getenv("ENV", "production") == "development"
+
+
+def dev_route():
+    from fastapi import Request
+
+    return {"message": "This is a development-only route. Remove this in production."}
+
+
+if IS_DEVELOPMENT:
+    app.add_route("/dev", dev_route, methods=["GET"])
+
 
 HOST = "0.0.0.0"
 PORT = 8000
