@@ -29,8 +29,6 @@ Usage:
     python -m server.app
 """
 
-import os
-
 try:
     from openenv.core.env_server.http_server import create_app
 except Exception as e:  # pragma: no cover
@@ -55,19 +53,6 @@ app = create_app(
     env_name="agentrology",
     max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
 )
-
-
-IS_DEVELOPMENT = os.getenv("ENV", "production") == "development"
-
-
-def dev_route():
-    from fastapi import Request
-
-    return {"message": "This is a development-only route. Remove this in production."}
-
-
-if IS_DEVELOPMENT:
-    app.add_route("/dev", dev_route, methods=["GET"])
 
 
 HOST = "0.0.0.0"

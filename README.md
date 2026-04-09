@@ -138,6 +138,47 @@ The deployed space provides:
 2.  **OpenAPI Docs** (`/docs`): Schema verification.
 3.  **Persistent WebSocket** (`/ws`): Primary interface for agent inference.
 
+
+## Code Quality and Formatting
+
+This project enforces consistent code quality and formatting using a unified toolchain.
+
+### Tooling
+
+* Ruff: linting, formatting, and import sorting
+* pre-commit: Git hooks for automated checks
+* uv: dependency and environment management
+
+### Setup
+
+Install dependencies and enable Git hooks:
+
+```bash
+uv sync
+uv run pre-commit install
+```
+
+### Formatting and Linting
+
+Apply formatting and automatically fix lint issues:
+
+```
+./scripts/format.sh
+```
+
+OR manually run:
+
+```bash
+uv run ruff check . --fix
+uv run ruff format .
+```
+
+Run all configured checks:
+
+```bash
+uv run pre-commit run
+```
+
 ## License
 
 This project is licensed under the BSD 3-Clause License - see the [LICENSE](./LICENSE) file for details. Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.

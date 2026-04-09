@@ -77,13 +77,14 @@ def debug_print(msg: str) -> None:
 _MAX_REWARD_PER_STEP = MAX_TOKENS * 0.1
 MAX_TOTAL_REWARD = MAX_STEPS * _MAX_REWARD_PER_STEP
 
-SYSTEM_PROMPT = textwrap.dedent("""
+SYSTEM_PROMPT = textwrap.dedent(
+    """
 You are an Autonomous L2 Security Operations Center (SOC) Analyst operating within a headless, containerized Linux environment.
 
 Your primary objective is to detect, diagnose, and neutralize active security threats (rogue background processes, unauthorized open ports, and persistent backdoors) on the host system.
 
 # ENVIRONMENT & CAPABILITIES
-1. You interact with the system entirely through a standard non-interactive bash shell. 
+1. You interact with the system entirely through a standard non-interactive bash shell.
 2. For every action you take, you will receive an observation containing:
    - `stdout`: The standard output of your command.
    - `stderr`: Any error output.
@@ -114,7 +115,8 @@ Example 3:
 [COMMAND] crontab -l
 
 Your output must always end with the [COMMAND] block. Do not wrap the command in markdown code blocks, just output the raw command string after the [COMMAND] tag.
-        """).strip()
+        """
+).strip()
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -156,7 +158,8 @@ def build_user_prompt(
     history: List[str],
 ) -> str:
     history_block = "\n".join(history[-4:]) if history else "None"
-    return textwrap.dedent(f"""
+    return textwrap.dedent(
+        f"""
         Step: {step}
         --- Previous Observation ---
         [STDOUT]:
@@ -170,7 +173,8 @@ def build_user_prompt(
         {history_block}
 
         Formulate your [THOUGHT] and [COMMAND].
-        """).strip()
+        """
+    ).strip()
 
 
 def parse_command(response_text: str) -> str:

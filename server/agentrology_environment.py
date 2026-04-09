@@ -245,7 +245,9 @@ class AgentrologyEnvironment(Environment):
         """
         score_delta = sum(
             max(0.0, now - before)
-            for now, before in zip(current.scores, self._previous_result.scores)
+            for now, before in zip(
+                current.scores, self._previous_result.scores, strict=False
+            )
         )
 
         reward = score_delta
@@ -310,5 +312,5 @@ class AgentrologyEnvironment(Environment):
                 severity=meta["severity"],
                 neutralised=score >= 1.0,
             )
-            for meta, score in zip(THREAT_META, result.scores)
+            for meta, score in zip(THREAT_META, result.scores, strict=False)
         ]

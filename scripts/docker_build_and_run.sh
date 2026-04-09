@@ -37,7 +37,7 @@ Usage: $0 [options]
   Builds the Docker image and runs the container for Agentrology.
 
   By default, it builds the image and starts the container.
-  You can skip the build step or enable the web interface 
+  You can skip the build step or enable the web interface
   using the options below.
 
 Options:

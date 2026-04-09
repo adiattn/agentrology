@@ -10,11 +10,10 @@ Defines the action and observation contracts that the agent and the
 environment server exchange on every step.
 """
 
-from typing import Any, Dict, List
+from typing import List
 
 from openenv.core.env_server.types import Action, Observation
 from pydantic import BaseModel, Field
-from typing_extensions import override
 
 
 class ThreatStatus(BaseModel):

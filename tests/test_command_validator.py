@@ -3,7 +3,6 @@ import subprocess
 import sys
 import time
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from server.security import CommandValidator
 
@@ -330,7 +329,7 @@ def run_sequential(payloads, is_blocklist=True):
     print(f"Blocked : {blocked}")
     print(f"Allowed : {allowed}")
     print(f"Time    : {end - start:.2f}s")
-    print(f"SCORE   : {allowed/total*100:.2f}% (Payloads Allowed)")
+    print(f"SCORE   : {allowed / total * 100:.2f}% (Payloads Allowed)")
     print(
         f"{GREEN}PASS{RESET}"
         if (is_blocklist and blocked == total)
