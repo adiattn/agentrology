@@ -6,6 +6,8 @@ PORT="8000"
 
 SKIP_BUILD=false
 ENABLE_WEB=false
+BASH=false
+BUILD_ONLY=false
 
 GREEN="\033[1;32m"
 RED="\033[1;31m"
@@ -42,6 +44,8 @@ Usage: $0 [options]
 
 Options:
   --skip-build
+  --bash
+  --build-only
   --web
   -h, --help
 EOF
@@ -57,6 +61,14 @@ while [[ $# -gt 0 ]]; do
     ENABLE_WEB=true
     shift
     ;;
+  --bash)
+    BASH=true
+    shift
+    ;;
+  --build-only)
+    BUILD_ONLY=true
+    shift
+    ;;
   -h | --help | help | h)
     usage
     exit 0
@@ -67,11 +79,39 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [ "$BASH" = true ]; then
+  info "Looking for running container to attach to..."
+  if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    log "Attaching to running container..."
+    docker exec -it "$CONTAINER_NAME" bash
+    # find containers using the image name and attach to the first one found
+    containers=$(docker ps --filter "ancestor=$IMAGE_NAME" --format '{{.Names}}')
+    if [ -n "$containers" ]; then
+      container=$(echo "$containers" | head -n 1)
+      log "Attaching to container: $container"
+      docker exec -it "$container" bash
+    fi
+    exit 0
+  else
+    error "No running container found to attach to."
+    exit 1
+  fi
+fi
+
 if [ "$SKIP_BUILD" = false ]; then
   log "Building Docker image..."
   docker build -t "$IMAGE_NAME" -f Dockerfile .
+  EXIT_CODE=$?
+  if [ $EXIT_CODE -ne 0 ]; then
+    error "Docker build failed with exit code $EXIT_CODE"
+  fi
 else
   warn "Skipping build"
+fi
+
+if [ "$BUILD_ONLY" = true ]; then
+  log "Build only mode enabled. Skipping container run."
+  exit 0
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then

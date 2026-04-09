@@ -32,6 +32,10 @@ class ThreatStatus(BaseModel):
     neutralised: bool
 
 
+COMMAND_MAX_LENGTH = 500
+# String should have at most 512 characters [type=string_too_long, input_value="ss -tulnp | grep -v 'LIS...| grep -v '127.0.0.1' |", input_type=str]
+
+
 class AgentrologyAction(Action):
     """A single shell command submitted by the agent.
 
@@ -40,6 +44,16 @@ class AgentrologyAction(Action):
             Must not exceed 512 characters. Dangerous commands
             (SSH, sudo, curl, etc.) are rejected before execution.
     """
+
+    @staticmethod
+    def is_actionable_command(command: str) -> bool:
+        """Returns True if the command is withing the allowed LENGTH limit."""
+        return len(command) <= COMMAND_MAX_LENGTH
+
+    @staticmethod
+    def get_command_len_limit() -> int:
+        """Returns the maximum allowed command length."""
+        return COMMAND_MAX_LENGTH
 
     command: str = Field(
         ...,

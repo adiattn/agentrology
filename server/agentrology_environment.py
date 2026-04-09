@@ -21,7 +21,9 @@ Public surface:
     AgentrologyEnvironment.state    -> State
 """
 
+import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
@@ -29,7 +31,12 @@ from openenv.core.env_server.types import State
 
 from models import AgentrologyAction, AgentrologyObservation, ThreatStatus
 from server.security import CommandValidator
-from server.threat_manager import THREAT_META, GraderResult, ThreatManager
+from server.threat_manager import GraderResult, ThreatManager
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 DIAGNOSTIC_PREFIXES = (
     "ps",
@@ -65,9 +72,13 @@ ACTION: IMMEDIATE REMEDIATION REQUIRED
 Threat intelligence briefing loaded. Begin investigation.
 """
 
-_COMMAND_TIMEOUT_SECONDS = 5
+_COMMAND_TIMEOUT_SECONDS = 10
+_COMMAND_REPETITION_THRESHOLD = 5  # max these many repetitions allowed
+_COMMAND_REPETITION_PENALTY = 0.1  # penalty per repetition beyond threshold
 _STDOUT_MAX_CHARS = 2000
 _STDERR_MAX_CHARS = 1000
+
+_executor = ThreadPoolExecutor(max_workers=4)
 
 
 class AgentrologyEnvironment(Environment):
@@ -102,6 +113,8 @@ class AgentrologyEnvironment(Environment):
         self._threat_manager = ThreatManager()
         self._previous_result = GraderResult()
         self._threat_manager.setup_scripts()
+        self.command_history: list[str] = []
+        self._logger = logging.getLogger(self.__class__.__name__)
 
     def reset(self) -> AgentrologyObservation:
         """Tear down any active threats and spawn a fresh incident.
@@ -110,11 +123,13 @@ class AgentrologyEnvironment(Environment):
             An AgentrologyObservation with active_threats == 6 and the
             incident response banner in stdout.
         """
+        self._logger.info("Resetting environment and spawning new incident.")
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._threat_manager.teardown()
         self._threat_manager.setup_scripts()
         self._threat_manager.spawn()
         self._previous_result = GraderResult()
+        self.command_history.clear()
 
         return AgentrologyObservation(
             stdout=RESET_BANNER,
@@ -157,7 +172,40 @@ class AgentrologyEnvironment(Environment):
             current = self._threat_manager.grade()
             return self._blocked_observation(command, current, validation.reason)
 
+        repetition_count = self.command_history.count(command)
+
+        self.command_history.append(command)
+        if "ps" not in command and "pgrep" not in command and "pstree" not in command:
+            if repetition_count >= _COMMAND_REPETITION_THRESHOLD:
+                current = self._threat_manager.grade()
+                reason = f"Command has been executed {repetition_count} times. "
+                return self._blocked_observation(command, current, reason)
+            elif repetition_count > 2:
+                penalty = repetition_count * _COMMAND_REPETITION_PENALTY
+                current = self._threat_manager.grade()
+                reward = -penalty
+                return AgentrologyObservation(
+                    stdout="",
+                    stderr="",
+                    active_threats=current.active_count,
+                    reward=reward,
+                    done=current.all_clear,
+                    threat_status=self._build_threat_status(current),
+                    security_violation=f"Command has been executed {repetition_count} times.",
+                    metadata={
+                        "step": self._state.step_count,
+                        "command": command,
+                        "repetition_count": repetition_count,
+                        "scores": current.scores,
+                        "total_score": current.total_score,
+                    },
+                )
+
+        self._logger.debug(f"Executing command: {command}")
         stdout, stderr, return_code = self._execute(command)
+        self._logger.debug(
+            f"Command return code: {return_code}, stdout length: {len(stdout)}, stderr: length: {len(stderr)}"
+        )
         current = self._threat_manager.grade()
         reward = self._compute_reward(command, return_code, current)
         self._previous_result = current
@@ -188,7 +236,11 @@ class AgentrologyEnvironment(Environment):
         """
         return self._state
 
-    def _execute(self, command: str) -> tuple[str, str, int]:
+    def _execute(self, command: str):
+        future = _executor.submit(self._execute_command, command)
+        return future.result()
+
+    def _execute_command(self, command: str) -> tuple[str, str, int]:
         """Run a validated shell command and capture its output.
 
         Args:
@@ -312,5 +364,7 @@ class AgentrologyEnvironment(Environment):
                 severity=meta["severity"],
                 neutralised=score >= 1.0,
             )
-            for meta, score in zip(THREAT_META, result.scores, strict=False)
+            for meta, score in zip(
+                self._threat_manager.threat_meta(), result.scores, strict=False
+            )
         ]

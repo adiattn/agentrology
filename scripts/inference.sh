@@ -24,7 +24,7 @@ BENCHMARK="agentrology-benchmark"
 HF_TOKEN=$HF_TOKEN
 API_KEY=$API_KEY
 IS_DEV="false"
-MAX_STEPS=40
+MAX_STEPS=${MAX_STEPS:-40}
 API_BASE_URL=""
 
 print_help() {

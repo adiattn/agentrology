@@ -9,6 +9,7 @@ Assumptions for Hugging Face environment:
 - SSH is already not present in Dockerfile
 """
 
+import os
 import re
 import shlex
 import urllib.parse
@@ -114,6 +115,12 @@ BLOCKED_PATTERNS = [
 
 ALLOWED_CRONTAB_SUBCOMMANDS = frozenset(["-r", "-l"])
 
+PROTECTED_PIDS = {
+    1,  # container init
+    os.getpid(),  # current process
+    os.getppid(),  # parent (uvicorn launcher)
+}
+
 
 @dataclass
 class ValidationResult:
@@ -155,6 +162,65 @@ class CommandValidator:
             (re.compile(pattern, re.IGNORECASE), reason)
             for pattern, reason in BLOCKED_PATTERNS
         ]
+
+    @staticmethod
+    def is_kill_self_command(command: str) -> bool:
+        """Detect commands that attempt to kill the agent process itself.
+
+        Args:
+            command: The raw shell command string submitted by the agent.
+        """
+        command = command.lower()
+        protected_keywords = ["uvicorn", "server.app", "/app/env"]
+
+        if command.startswith("pkill"):
+            if any(keyword in command for keyword in protected_keywords):
+                return True
+
+        if command.startswith("killall"):
+            if any(keyword in command for keyword in protected_keywords):
+                return True
+
+        if "$$" in command or "$(pgrep -f uvicorn)" in command:
+            return True
+
+        def extract_kill_pids(command: str) -> list[int]:
+            match = re.match(r"^kill(?:\s+-(\d+))?\s+((?:\d+\s*)+)$", command)
+            if not match:
+                return []
+            _ = match.group(1)
+            pid_part = match.group(2)
+            pids = re.findall(r"\b\d+\b", pid_part)
+            return [int(pid) for pid in pids]
+
+        def _get_process_cmd(pid: int) -> str:
+            import subprocess
+
+            try:
+                result = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "cmd="],
+                    capture_output=True,
+                    text=True,
+                    timeout=1,
+                )
+                return result.stdout.lower()
+            except Exception:
+                return ""
+
+        pids = extract_kill_pids(command)
+        if not pids:
+            return False
+
+        for pid in pids:
+            # direct PID protection
+            if pid in PROTECTED_PIDS:
+                return True
+
+            # Process-level protection
+            cmdline = _get_process_cmd(pid)
+            if any(k in cmdline for k in protected_keywords):
+                return True
+        return False
 
     def validate(self, command: str) -> ValidationResult:
         """Validate a shell command against the security policy.
@@ -219,6 +285,14 @@ class CommandValidator:
             return ValidationResult(
                 is_allowed=False,
                 reason=f"Execution of '{first_token}' is not permitted in this environment.",
+            )
+
+        if (
+            "kill" in stripped or "pkill" in stripped
+        ) and CommandValidator.is_kill_self_command(stripped):
+            return ValidationResult(
+                is_allowed=False,
+                reason="Policy violation: attempted termination of a protected environment server process (agent control/interface layer).",
             )
 
         return ValidationResult(is_allowed=True)

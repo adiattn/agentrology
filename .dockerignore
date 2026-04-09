@@ -89,3 +89,15 @@ venv/
 .vscode/
 
 .cache/
+
+*.md
+LICENSE
+docs/
+logs/
+tests/
+scripts/
+.env.example
+.pre-commit-config.yaml
+.ruff_cache
+.venv
+benchmarks

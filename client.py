@@ -6,13 +6,16 @@
 
 """Agentrology Environment Client."""
 
-from typing import Dict
+from typing import Dict, Optional
 
 from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
 from models import AgentrologyAction, AgentrologyObservation
+
+_DEFAULT_CONNECT_TIMEOUT_S = 60 * 2
+_DEFAULT_MESSAGE_TIMEOUT_S = 60 * 2
 
 
 class AgentrologyEnv(EnvClient[AgentrologyAction, AgentrologyObservation, State]):
@@ -41,6 +44,24 @@ class AgentrologyEnv(EnvClient[AgentrologyAction, AgentrologyObservation, State]
         ... finally:
         ...     client.close()
     """
+
+    def __init__(
+        self,
+        base_url: str,
+        connect_timeout_s: float = _DEFAULT_CONNECT_TIMEOUT_S,
+        message_timeout_s: float = _DEFAULT_MESSAGE_TIMEOUT_S,
+        max_message_size_mb: float = 100,
+        provider=None,
+        mode: Optional[str] = None,
+    ):
+        super().__init__(
+            base_url,
+            connect_timeout_s,
+            message_timeout_s,
+            max_message_size_mb,
+            provider,
+            mode,
+        )
 
     def _step_payload(self, action: AgentrologyAction) -> Dict:
         """
