@@ -26,7 +26,7 @@ import re
 import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, List, Optional
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
@@ -78,6 +78,7 @@ _STDOUT_MAX_CHARS = 2000
 _STDERR_MAX_CHARS = 1000
 
 _executor = ThreadPoolExecutor(max_workers=4)
+_SERVER_PORT = 8000
 
 
 class AgentrologyEnvironment(Environment):
@@ -127,18 +128,23 @@ class AgentrologyEnvironment(Environment):
         """
         return []
 
-    def reset(self) -> AgentrologyObservation:
+    def reset(self, task_id: str | List[str] | None = None) -> AgentrologyObservation:
         """Tear down any active threats and spawn a fresh incident.
 
         Returns:
             An AgentrologyObservation with active_threats == 6 and the
             incident response banner in stdout.
         """
-        self._logger.info("Resetting environment and spawning new incident.")
+        task_ids = []
+        if task_id:
+            if isinstance(task_id, str):
+                task_ids = [task_id]
+            elif isinstance(task_id, list):
+                task_ids = task_id
+
+        self._logger.info(f"Resetting environment for tasks: {task_ids}")
         self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._threat_manager.teardown()
-        self._threat_manager.setup_scripts()
-        self._threat_manager.spawn()
+        self._threat_manager.reset_tasks(task_ids=task_ids, all_if_empty=True)
         self._previous_result = GraderResult()
         self.command_history.clear()
         self._trace_steps.clear()
@@ -146,7 +152,7 @@ class AgentrologyEnvironment(Environment):
         return AgentrologyObservation(
             stdout=RESET_BANNER,
             stderr="",
-            active_threats=6,
+            active_threats=self._threat_manager.active_count(),
             reward=0.0,
             done=False,
             threat_status=self._build_threat_status(self._previous_result),
@@ -225,6 +231,12 @@ class AgentrologyEnvironment(Environment):
                     },
                 )
 
+        if str(_SERVER_PORT) in command:
+            current = self._threat_manager.grade()
+            reason = f"Commands containing the environment server port {_SERVER_PORT} are not allowed."
+            self._record_trace(command, "", "", current, reason)
+            return self._blocked_observation(command, current, reason)
+
         self._logger.debug(f"Executing command: {command}")
         stdout, stderr, return_code = self._execute(command)
         self._logger.debug(
@@ -259,7 +271,7 @@ class AgentrologyEnvironment(Environment):
         stdout: str,
         stderr: str,
         current: GraderResult,
-        blocked_reason: str,
+        blocked_reason: Optional[str],
     ):
         neutralised_threats = []
         for i, (old_score, new_score) in enumerate(
@@ -436,7 +448,7 @@ class AgentrologyEnvironment(Environment):
         self,
         command: str,
         current: GraderResult,
-        reason: str,
+        reason: Optional[str],
     ) -> AgentrologyObservation:
         """Build an observation for a command blocked by the security policy.
 
@@ -456,7 +468,7 @@ class AgentrologyEnvironment(Environment):
             reward=0.0,
             done=current.all_clear,
             threat_status=self._build_threat_status(current),
-            security_violation=reason,
+            security_violation=reason or "Command blocked by security policy.",
             metadata={
                 "step": self._state.step_count,
                 "command_blocked": command,
@@ -510,3 +522,11 @@ class AgentrologyEnvironment(Environment):
             "threats": threats,
             "steps": self._trace_steps,
         }
+
+    def get_tasks(self) -> list[dict]:
+        """Get the list of available tasks in the environment.
+
+        Returns:
+            A list of task names.
+        """
+        return self._threat_manager.list_all_available_tasks()

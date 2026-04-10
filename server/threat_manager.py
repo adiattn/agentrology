@@ -74,20 +74,29 @@ class GraderResult:
 
 class ThreatManager:
     """Orchestrates the full lifecycle of all six simulated security threats.
-
     All threat-specific behaviour is delegated to the ThreatTask objects
-    in ALL_TASKS. This class is responsible only for:
-        - Coordinating setup / spawn / teardown across all tasks.
-        - Collecting per-task grades into a GraderResult.
-        - Providing metadata about the active threat set.
 
     Args:
         tasks: Override the default ALL_TASKS list (useful for testing
                a subset of threats).
     """
 
-    def __init__(self, tasks: list[ThreatTask] | None = None) -> None:
-        self._tasks: list[ThreatTask] = tasks if tasks is not None else ALL_TASKS
+    def __init__(self) -> None:
+        self._tasks: list[ThreatTask] = ALL_TASKS.copy()
+
+    def active_count(self) -> int:
+        """Return the number of currently active threats."""
+        return len(self._tasks)
+
+    def reset_tasks(self, task_ids: list[str], all_if_empty: bool = False) -> None:
+        """Reset the active task list (tearing down any existing tasks first)."""
+        self.teardown()
+        if all_if_empty and not task_ids:
+            self._tasks = [task for task in ALL_TASKS]
+        else:
+            self._tasks = [task for task in ALL_TASKS if task.threat_id in task_ids]
+        self.setup_scripts()
+        self.spawn()
 
     def setup_scripts(self) -> None:
         """Write all payload scripts to disk (idempotent)."""
@@ -118,7 +127,7 @@ class ThreatManager:
         """
         return GraderResult(scores=[task.grade() for task in self._tasks])
 
-    def threat_meta(self) -> list[dict]:
+    def threat_meta(self, active_only: bool = False) -> list[dict]:
         """Return display metadata for all managed tasks."""
         return [
             {
@@ -127,5 +136,9 @@ class ThreatManager:
                 "severity": t.severity,
                 "conditions": t.conditions,
             }
-            for t in self._tasks
+            for t in (ALL_TASKS if active_only else self._tasks)
         ]
+
+    def list_all_available_tasks(self) -> list[dict]:
+        """Return a list of all available tasks."""
+        return self.threat_meta(active_only=False)

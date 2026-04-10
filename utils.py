@@ -1,4 +1,5 @@
 import os
+import queue
 import re
 import sys
 import threading
@@ -57,17 +58,39 @@ class Tee:
         return self.stdout.isatty()
 
 
-def init_logging(log_file: str):
+_log_queue = queue.Queue(maxsize=1000)
+
+
+def _log_worker():
+    while True:
+        line = _log_queue.get()
+        if line is None:
+            break
+        _post_line(line)
+        _log_queue.task_done()
+
+
+def init_logging(log_file: str, is_submission_env: bool = False):
     """Capture logs to terminal, file, and remote log server."""
+    global LOG_SERVER_URL
+    LOG_SERVER_URL = LOG_SERVER_URL if not is_submission_env else None
     if not log_file:
         return
+
     os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
     log_f = open(log_file, "a", buffering=1)  # line-buffered
-    sys.stdout = Tee(sys.__stdout__, log_f)
-    sys.stderr = Tee(sys.__stderr__, log_f)
+    sys.stdout = Tee(sys.__stdout__, log_f, send_to_server=is_submission_env)
+    sys.stderr = Tee(sys.__stderr__, log_f, send_to_server=is_submission_env)
+    if is_submission_env:
+        _worker_thread = threading.Thread(target=_log_worker, daemon=True)
+        _worker_thread.start()
 
 
-def send_direct_log(line: str):
+def send_direct_log(line: str, is_submission_env: bool = False):
     """Send a log line directly to the log server, bypassing the Tee."""
-    if line.strip():
-        threading.Thread(target=_post_line, args=(line,), daemon=True).start()
+    if not is_submission_env:
+        return
+    try:
+        _log_queue.put_nowait(line)
+    except queue.Full:
+        pass

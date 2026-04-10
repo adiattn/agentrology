@@ -123,6 +123,8 @@ PROTECTED_PIDS = {
     os.getppid(),  # parent (uvicorn launcher)
 }
 
+PROTECTED_KEYWORDS = ["uvicorn", "server.app", "/app/env"]
+
 # Allowlist for read-only diagnostic/forensic commands.
 # These are the commands a threat-neutralization agent legitimately needs.
 # A pipeline is safe if EVERY segment's first token is in this set.
@@ -249,11 +251,11 @@ class CommandValidator:
         command = command.lower()
         protected_keywords = ["uvicorn", "server.app", "/app/env"]
 
-        if command.startswith("pkill"):
-            if any(keyword in command for keyword in protected_keywords):
-                return True
-
-        if command.startswith("killall"):
+        if (
+            command.startswith("pkill")
+            or command.startswith("killall")
+            or command.startswith("kill")
+        ):
             if any(keyword in command for keyword in protected_keywords):
                 return True
 
@@ -413,12 +415,19 @@ class CommandValidator:
                 reason=f"Execution of '{first_token}' is not permitted in this environment.",
             )
 
+        # since this blocks many possible variants
+        if "xargs kill" in stripped or "| kill" in stripped:
+            return ValidationResult(
+                is_allowed=False,
+                reason="Piping into kill or using xargs kill is forbidden to prevent self-termination attempts. Prefer using 'kill' with explicit PIDs.",
+            )
+
         if (
             "kill" in stripped or "pkill" in stripped
         ) and CommandValidator.is_kill_self_command(stripped):
             return ValidationResult(
                 is_allowed=False,
-                reason="Policy violation: attempted termination of server process. Remember: this process is your own process, if you kill it, you will die. Don't do it.",
+                reason="[CRITICAL POLICY VIOLATION] Self-termination attempt detected. Target process is part of the agent runtime. This action is prohibited and MUST NOT be executed.",
             )
 
         return ValidationResult(is_allowed=True)

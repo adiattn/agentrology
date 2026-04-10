@@ -1,46 +1,6 @@
 #!/usr/bin/env python
 """
-Inference Script Example
-===================================
-MANDATORY
-- Before submitting, ensure the following variables are defined in your environment configuration:
-    API_BASE_URL   The API endpoint for the LLM.
-    MODEL_NAME     The model identifier to use for inference.
-    HF_TOKEN       Your Hugging Face / API key.
-    LOCAL_IMAGE_NAME The name of the local image to use for the environment if you are using from_docker_image()
-                     method
-
-- Defaults are set only for API_BASE_URL and MODEL_NAME
-    (and should reflect your active inference setup):
-    API_BASE_URL = os.getenv("API_BASE_URL", "<your-active-endpoint>")
-    MODEL_NAME = os.getenv("MODEL_NAME", "<your-active-model>")
-
-- The inference script must be named `inference.py` and placed in the root directory of the project
-- Participants must use OpenAI Client for all LLM calls using above variables
-
-STDOUT FORMAT
-- The script must emit exactly three line types to stdout, in this order:
-
-    [START] task=<task_name> env=<benchmark> model=<model_name>
-    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
-    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
-
-  Rules:
-    - One [START] line at episode begin.
-    - One [STEP] line per step, immediately after env.step() returns.
-    - One [END] line after env.close(), always emitted (even on exception).
-    - reward and rewards are formatted to 2 decimal places.
-    - done and success are lowercase booleans: true or false.
-    - error is the raw last_action_error string, or null if none.
-    - All fields on a single line with no newlines within a line.
-    - Each tasks should return score in [0, 1]
-
-  Example:
-    [START] task=click-test env=miniwob model=Qwen3-VL-30B
-    [STEP] step=1 action=click('123') reward=0.00 done=false error=null
-    [STEP] step=2 action=fill('456','text') reward=0.00 done=false error=null
-    [STEP] step=3 action=click('789') reward=1.00 done=true error=null
-    [END] success=true steps=3 score=1.00 rewards=0.00,0.00,1.00
+Inference Script
 """
 
 import argparse
@@ -60,7 +20,10 @@ from utils import init_logging, send_direct_log
 
 
 def cli_parse_args():
-    parser = argparse.ArgumentParser(description="Agentrology Inference Script")
+    parser = argparse.ArgumentParser(
+        prog="Agentrology Inference Script",
+        description="Run this script to execute the agent in inference mode. Make sure to set necessary environment variables or pass them as command-line arguments.",
+    )
     parser.add_argument("--dev", action="store_true", help="Enable dev mode")
     parser.add_argument("--ollama", action="store_true", help="Use Ollama (local)")
     parser.add_argument("--hf", action="store_true", help="Use HuggingFace (default)")
@@ -68,20 +31,13 @@ def cli_parse_args():
     parser.add_argument("--task", type=str, help="Task name")
     parser.add_argument("--benchmark", type=str, help="Benchmark name")
     parser.add_argument("--api-url", type=str, help="Override API base URL")
+    parser.add_argument("--max-steps", help="Max steps to run the agent", type=int)
+    parser.add_argument("--temperature", help="Temperature for the LLM", type=float)
+    parser.add_argument("--max-tokens", help="Max tokens for the LLM", type=int)
     parser.add_argument(
-        "--max-steps", help="Max steps to run the agent", type=int, default=45
-    )
-    parser.add_argument(
-        "--temperature", help="Temperature for the LLM", type=float, default=0.06
-    )
-    parser.add_argument(
-        "--max-tokens", help="Max tokens for the LLM", type=int, default=150
-    )
-    parser.add_argument(
-        "--no-reasoning",
-        help="Disable reasoning mode",
+        "--reasoning",
+        help="Enable reasoning mode",
         action="store_true",
-        default=True,
     )
     parser.add_argument(
         "--interactive",
@@ -89,16 +45,11 @@ def cli_parse_args():
         action="store_true",
         default=False,
     )
-    parser.add_argument(
-        "--image",
-        help="Docker image name",
-        default=os.getenv("LOCAL_IMAGE_NAME", "agentrology-env:latest"),
-    )
-    parser.add_argument("--log-file", help="Log file", default=os.getenv("LOG_FILE"))
+    parser.add_argument("--image", help="Docker image name")
+    parser.add_argument("--log-file", help="Log file")
     parser.add_argument(
         "--benchmark-dir",
         help="Benchmark directory",
-        default=os.getenv("BENCHMARK_DIR", "benchmarks"),
     )
     parser.add_argument(
         "--port",
@@ -129,29 +80,32 @@ API_KEY = (
     or "[NONE]"
 )
 API_BASE_URL = args.api_url or os.getenv("API_BASE_URL") or default_api_base_url
-MODEL_NAME = args.model or os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
-TASK_NAME = args.task or os.getenv("AGENTROLOGY_TASK", "agentrology-task")
+MODEL_NAME = args.model or os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
+# TASK_NAME = args.task or os.getenv("AGENTROLOGY_TASK", "agentrology-task")
 BENCHMARK = args.benchmark or os.getenv("BENCHMARK", "agentrology-benchmark")
 MAX_STEPS = args.max_steps or int(os.getenv("MAX_STEPS", "45"))
 REASONING_MODE = (
-    False
-    if args.no_reasoning
-    else (os.getenv("REASONING_MODE", "true").lower() == "true")
+    True if args.reasoning else (os.getenv("REASONING_MODE", "false").lower() == "true")
 )
 IS_SUBMISSION_ENV = os.getenv("SHELL", "") != "/usr/bin/zsh"
-IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or (
-    "adityacd3/agentrology-env:latest"
-    if IS_SUBMISSION_ENV
-    else "agentrology-env:latest"
+IMAGE_NAME = (
+    args.image
+    or os.getenv("LOCAL_IMAGE_NAME")
+    or (
+        "adityacd3/agentrology-env:latest"
+        if IS_SUBMISSION_ENV
+        else "agentrology-env:latest"
+    )
 )
 LOG_FILE = os.getenv(
     "LOG_FILE",
-    f"logs/{BENCHMARK}_{TASK_NAME}_{MODEL_NAME.replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+    f"logs/{BENCHMARK}_{MODEL_NAME.replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
 )
-TEMPERATURE = float(os.getenv("TEMPERATURE", "0.06"))
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "500"))
-SUCCESS_SCORE_THRESHOLD = 0.1  # normalized score in [0, 1]
-INTERACTIVE_MODE = os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
+TEMPERATURE = args.temperature or float(os.getenv("TEMPERATURE", "0.06"))
+MAX_TOKENS = args.max_tokens or int(os.getenv("MAX_TOKENS", "500"))
+INTERACTIVE_MODE = (
+    args.interactive or os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
+)
 WS_CONNECTION_TIMEOUT = int(os.getenv("WS_CONNECTION_TIMEOUT", "60"))
 BENCHMARK_DIR = os.getenv("BENCHMARK_DIR", "benchmarks")
 EXPOSE_PORT = int(os.getenv("EXPOSE_PORT", "0"))
@@ -162,22 +116,7 @@ from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-init_logging(LOG_FILE)
-
-
-def is_running_in_docker() -> bool:
-    path = "/proc/self/cgroup"
-    if os.path.exists("/.dockerenv"):
-        return True
-    if os.path.isfile(path):
-        try:
-            with open(path, "r") as f:
-                for line in f:
-                    if "docker" in line:
-                        return True
-        except Exception:
-            pass
-    return False
+init_logging(LOG_FILE, IS_SUBMISSION_ENV)
 
 
 def check_docker_image_exists(image_name: str) -> bool:
@@ -193,26 +132,6 @@ def check_docker_image_exists(image_name: str) -> bool:
         return False
 
 
-def get_git_info() -> Tuple[bool, Optional[str]]:
-    try:
-        is_git = (
-            subprocess.check_output(
-                ["git", "rev-parse", "--is-inside-work-tree"], text=True
-            )
-            .strip()
-            .lower()
-            == "true"
-        )
-        if is_git:
-            remote = subprocess.check_output(
-                ["git", "remote", "get-url", "origin"], text=True
-            ).strip()
-            return True, remote
-    except Exception:
-        pass
-    return False, None
-
-
 def color_print(msg, color, file=sys.stdout, flush=True):
 
     if file.isatty():
@@ -221,41 +140,38 @@ def color_print(msg, color, file=sys.stdout, flush=True):
         print(msg, file=file, flush=flush)
 
 
-def print_config() -> None:
+def print_config(tasks: list[dict]) -> None:
 
-    is_docker = is_running_in_docker()
     image_exists = check_docker_image_exists(IMAGE_NAME)
-    is_git, git_remote = get_git_info()
+    task_ids = [t["threat_id"] for t in tasks]
 
     config_vars = {
         "IMAGE_NAME": IMAGE_NAME,
         "IMAGE_EXISTS": image_exists,
-        "RUNNING_IN_DOCKER": is_docker,
-        "IS_GIT_DIR": is_git,
-        "GIT_REMOTE": git_remote,
-        "LLM_MODE": "ollama" if args.ollama else "external",
-        "OS": os.name,
-        "SHELL": os.getenv("SHELL", "unknown"),
         "API_BASE_URL": API_BASE_URL,
         "MODEL_NAME": MODEL_NAME,
-        "TASK_NAME": TASK_NAME,
         "BENCHMARK": BENCHMARK,
+        "TASKS": ", ".join(task_ids),
         "MAX_STEPS": MAX_STEPS,
-        "IS_DEV": IS_DEV,
-        "LOG_FILE": LOG_FILE,
+        "LLM_MODE": "ollama" if args.ollama else "external",
+        "REASONING_MODE": REASONING_MODE,
         "TEMPERATURE": TEMPERATURE,
         "MAX_TOKENS": MAX_TOKENS,
+        "IS_DEV": IS_DEV,
+        "LOG_FILE": LOG_FILE,
         "INTERACTIVE_MODE": INTERACTIVE_MODE,
         "WS_CONNECTION_TIMEOUT": WS_CONNECTION_TIMEOUT,
         "BENCHMARK_DIR": BENCHMARK_DIR,
         "EXPOSE_PORT": EXPOSE_PORT,
-        "REASONING_MODE": REASONING_MODE,
+        "OS": os.name,
     }
     if not IS_DEV:
         send_direct_log(
-            json.dumps({"event": "inference_config", "config": config_vars})
+            json.dumps({"event": "inference_config", "config": config_vars}, indent=2),
+            is_submission_env=IS_SUBMISSION_ENV,
         )
         return
+
     color_print(
         "============================================================", Fore.CYAN
     )
@@ -273,14 +189,11 @@ def print_config() -> None:
     )
 
 
-print_config()
-
-
-def debug_print(msg: str) -> None:
+def debug_print(msg: str, allow_in_submission=True) -> None:
     if IS_DEV:
         color_print(f"[DEBUG] {msg}", Fore.YELLOW)
-    else:
-        send_direct_log(f"[DEBUG] {msg}")
+    elif allow_in_submission:
+        send_direct_log(f"[DEBUG] {msg}", IS_SUBMISSION_ENV)
 
 
 def log_error(msg: str) -> None:
@@ -295,27 +208,35 @@ def log_info(msg: str) -> None:
 _MAX_REWARD_PER_STEP = MAX_TOKENS * 0.1
 MAX_TOTAL_REWARD = MAX_STEPS * _MAX_REWARD_PER_STEP
 
-SYSTEM_PROMPT = textwrap.dedent(
+SYSTEM_PROMPT_HEADER = textwrap.dedent(
     """
+[AGENTROLOGY]
 You are an Autonomous L2 Security Operations Center (SOC) Analyst operating within a Linux environment.
+Your objective: Neutralize active_threats via non-interactive bash.
 
-Your primary objective is to detect, diagnose, and neutralize active security threats on the host system.
-
-# ENVIRONMENT & CAPABILITIES
-1. You interact with the system entirely through a standard non-interactive bash shell.
-2. For every action you take, you will receive an observation containing:
-   - `stdout`: The standard output of your command.
-   - `stderr`: Any error output.
-   - `active_threats`: An integer indicating how many policy-violating threats are currently active on the system.
-   - `reward`: A float indicating your progress (positive for neutralizing threats, negative for destructive actions).
-3. The episode ends successfully when `active_threats` reaches 0.
+# ENVIRONMENT
+For every action, you receive:
+- stdout: command output
+- stderr: errors
+- active_threats (T): number of remaining threats
+- reward (R): progress signal (positive = good, zero = ineffective/destructive)
+- security_violation: message if your command was blocked due to violation
 
 # RULES OF ENGAGEMENT
 1. NO INTERACTIVE COMMANDS: Never run commands that require user input or open interactive visual interfaces.
-2. Do not perform destructive system actions (reboot, shutdown, network disable). You will be heavily penalized for destructive negligence.
-3. In History: R := reward, T := active_threats after executing the command
-4. Do not try to use any tool. Stick to the format specified.
-5. IMPORTANT:  The /app/env directory contains your interface uvicorn server, Do **NOT** attempt to kill or delete files from that location.
+2. DESTRUCTION: Never use reboot, shutdown, rm -rf, or network disabling.
+3. IMPORTANT:  The /app/env directory contains your interface uvicorn server, Do **NOT** attempt to kill or delete files from that location.
+4. NO MASS TERMINATION: Commands that terminate multiple processes at once (via pipes, xargs, or pattern matching) are strictly prohibited.
+5. NEVER target directly or indirectly: uvicorn processes, PORT 8000, /app/env
+6. If a command does not reduce T, DO NOT repeat it, change strategy
+7. RESPECT VIOLATIONS: A violation signal indicates a critical boundary; ignore it at the cost of a terminal penalty.
+"""
+).strip()
+
+
+SYSTEM_PROMPT = textwrap.dedent(
+    SYSTEM_PROMPT_HEADER
+    + """
 
 # REASONING FRAMEWORK
 For every turn, you must structure your response in two parts:
@@ -327,38 +248,16 @@ Example 1:
 [COMMAND] ps auxf
 
 Example 2:
-[THOUGHT] The previous output showed a python process named 'reverse_shell.py' running with PID 405. This is clearly unauthorized. I need to terminate it immediately.
-[COMMAND] kill -9 405
-
-Example 3:
-[THOUGHT] I killed PID 405, but active_threats is still 1. The process must have restarted. I will check the crontab for scheduled tasks.
-[COMMAND] crontab -l
+[THOUGHT] There is a process listening on a network port that is not associated with known services on this system. I will terminate the associated process.
+[COMMAND] kill -9 742
 
 Your output must always end with the [COMMAND] block. Do not wrap the command in markdown code blocks, just output the raw command string after the [COMMAND] tag.
 """
 ).strip()
 
 SYSTEM_PROMPT_NO_REASONING = textwrap.dedent(
-    """
-You are an Autonomous L2 Security Operations Center (SOC) Analyst operating within a Linux environment.
-
-Your primary objective is to detect, diagnose, and neutralize active security threats on the host system.
-
-# ENVIRONMENT & CAPABILITIES
-1. You interact with the system entirely through a standard non-interactive bash shell.
-2. For every action you take, you will receive an observation containing:
-   - `stdout`: The standard output of your command.
-   - `stderr`: Any error output.
-   - `active_threats`: An integer indicating how many policy-violating threats are currently active on the system.
-   - `reward`: A float indicating your progress (positive for neutralizing threats, negative for destructive actions).
-3. The episode ends successfully when `active_threats` reaches 0.
-
-# RULES OF ENGAGEMENT
-1. NO INTERACTIVE COMMANDS: Never run commands that require user input or open interactive visual interfaces.
-2. Do not perform destructive system actions (reboot, shutdown, network disable). You will be heavily penalized for destructive negligence.
-3. In History: R := reward, T := active_threats after executing the command
-4. Do not try to use any tool. Stick to the format specified.
-5. IMPORTANT:  The /app/env directory contains your interface uvicorn server, Do **NOT** attempt to kill or delete files from that location.
+    SYSTEM_PROMPT_HEADER
+    + """
 
 # REASONING FRAMEWORK
 For every turn, you must respond with exactly ONE valid Linux shell command to execute. Do NOT provide any thought or reasoning.
@@ -371,6 +270,9 @@ Example 2:
 
 Example 3:
 [COMMAND] crontab -l
+
+Example 4:
+[COMMAND] find /usr/bin /usr/sbin -mmin -60
 
 Your output must be EXACTLY the [COMMAND] block and nothing else. Do not wrap the command in markdown code blocks, just output the raw command string after the [COMMAND] tag.
 """
@@ -404,10 +306,10 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
     color_print(msg, Fore.MAGENTA)
 
 
-USER_PROMPT_TEMPLATE = """
+USER_PROMPT_TEMPLATE = """\
 [STEP]: {step}
-
 ## OBSERVATION
+{security_violation_block}
 [STDOUT]: {stdout}
 [STDERR]: {stderr}
 [ACTIVE THREATS]: {active_threats}
@@ -418,41 +320,70 @@ USER_PROMPT_TEMPLATE = """
 [RECENT HISTORY]:
 {history_block}
 
-Formulate your [THOUGHT] and [COMMAND].
+{footer}
 """
 
+USER_PROMPT_FOOTER_TEMPLATE_NO_REASONING = """Formulate your [COMMAND]."""
+USER_PROMPT_FOOTER_TEMPLATE_REASONING = """Formulate your [THOUGHT] and [COMMAND]."""
 
-USER_PROMPT_TEMPLATE_NO_REASONING = """
-[STEP]: {step}
+SECURITY_VIOLATION_BLOCK_TEMPLATE = """\
+[SYSTEM SECURITY VIOLATION!!]: {security_violation_message}"""
 
-## OBSERVATION
-[STDOUT]: {stdout}
-[STDERR]: {stderr}
-[ACTIVE THREATS]: {active_threats}
+HISTORY_PREFIX_TEMPLATE = "[S{step}] CMD={command} R={reward:+.2f} T={active_threats} {violation_part} {execution_result_part}"
+HISTORY_PREFIX_TEMPLATE_SAME_STEP = (
+    "[S{step}] CMD={command} R={reward:+.2f} T={active_threats}"
+)
 
-## FEEDBACK
-[LAST REWARD]: {last_reward:.2f}
 
-[RECENT HISTORY]:
-{history_block}
-
-Formulate your [COMMAND].
-"""
+HISTORY_ITEMS_COUNT = 4
 
 
 def build_user_prompt(
     step: int,
     stdout: str,
     stderr: str,
+    security_violation_message: Optional[str],
     active_threats: int,
     last_reward: float,
-    history: List[str],
+    history: List[Dict],
 ) -> str:
-    history_block = "\n".join(history[-4:]) if history else "None"
 
-    template = (
-        USER_PROMPT_TEMPLATE if REASONING_MODE else USER_PROMPT_TEMPLATE_NO_REASONING
+    history_block = ""
+    for item in history[-HISTORY_ITEMS_COUNT:]:
+        execution_result_part = ""
+        if item.get("step", 0) != step - 1:
+            execution_result_part += (
+                f'stdout={item["stdout"]} ' if item.get("stdout") else ""
+            )
+            execution_result_part += (
+                f'stderr={item["stderr"]}' if item.get("stderr") else ""
+            )
+        history_block += (
+            HISTORY_PREFIX_TEMPLATE.format(
+                step=item.get("step", 0),
+                command=item.get("command", ""),
+                reward=item.get("reward", 0.0),
+                active_threats=item.get("threats_count", 0),
+                violation_part=(
+                    "COMMAND_BLOCKED=True" if item.get("blocked", False) else ""
+                ),
+                execution_result_part=execution_result_part.strip(),
+            ).strip()
+            + "\n"
+        )
+
+    template = USER_PROMPT_TEMPLATE
+    footer = (
+        USER_PROMPT_FOOTER_TEMPLATE_REASONING
+        if REASONING_MODE
+        else USER_PROMPT_FOOTER_TEMPLATE_NO_REASONING
     )
+
+    security_violation_block = ""
+    if security_violation_message:
+        security_violation_block = SECURITY_VIOLATION_BLOCK_TEMPLATE.format(
+            security_violation_message=security_violation_message
+        )
 
     return (
         textwrap.dedent(template)
@@ -462,7 +393,9 @@ def build_user_prompt(
             stderr=stderr,
             active_threats=active_threats,
             last_reward=last_reward,
+            security_violation_block=security_violation_block,
             history_block=history_block,
+            footer=footer,
         )
         .strip()
     )
@@ -477,11 +410,47 @@ def parse_command(response_text: str) -> Optional[str]:
     return None
 
 
+import httpx
 from openai import AsyncOpenAI
 from openenv.core.env_client import LocalDockerProvider
 
 from client import AgentrologyEnv
 from models import AgentrologyAction
+
+BRIDGE_API = "http://127.0.0.1:8080"
+
+
+async def chat_with_ui(user_prompt: str) -> str:
+    async with httpx.AsyncClient() as client:
+        # send prompt
+        await client.post(f"{BRIDGE_API}/send", json={"text": user_prompt})
+        debug_print("[++BRIDGE++] Prompt sent to UI, waiting for response...")
+
+        # wait for response
+        while True:
+            res = await client.get(f"{BRIDGE_API}/latest")
+            data = res.json()
+
+            if data["response"]:
+                debug_print("[++BRIDGE++] Response received from UI.")
+                return data["response"].strip()
+
+            await asyncio.sleep(1)
+
+
+async def reset_bridge():
+    if not INTERACTIVE_MODE:
+        return
+    try:
+        response = httpx.post(f"{BRIDGE_API}/send", json={"text": "[RESET]"})
+        if response.status_code == 200:
+            debug_print("[++BRIDGE++] Bridge reset request sent.")
+            # small delay to ensure bridge resets before next interaction
+            await asyncio.sleep(2)
+        else:
+            log_error(f"Failed to reset bridge, status code: {response.status_code}")
+    except Exception as e:
+        log_error(f"Error resetting bridge: {e}")
 
 
 async def get_model_action(
@@ -490,20 +459,34 @@ async def get_model_action(
     stdout: str,
     stderr: str,
     active_threats: int,
+    last_security_violation: Optional[str],
     last_reward: float,
-    history: List[str],
+    history: List[Dict],
 ) -> Tuple[str, Optional[str], Optional[str]]:
     user_prompt = build_user_prompt(
-        step, stdout, stderr, active_threats, last_reward, history
+        step=step,
+        stdout=stdout,
+        stderr=stderr,
+        security_violation_message=last_security_violation,
+        active_threats=active_threats,
+        last_reward=last_reward,
+        history=history,
     )
+
+    ## TODO: comment when not debugging
+    # debug_print(f"[PROMPT] {user_prompt}")
 
     try:
         if INTERACTIVE_MODE:
-            print()
-            print("[PROMPT]")
-            print(user_prompt)
-            print()
-            text = await asyncio.to_thread(input, "Enter model response: ")
+            # text = "[THOUGHT] [REASONING DISABLED]\n[COMMAND] pwd"
+            if step == 1:
+                user_prompt = SYSTEM_PROMPT + "\n\n" + user_prompt
+            text = await chat_with_ui(user_prompt)
+            # add random delay to simulate thinking time and make it more natural in the UI
+            debug_print(
+                f"Model response received: {text}, adding random delay to simulate thinking..."
+            )
+            await asyncio.sleep(random.uniform(0.5, 2.0))
         else:
             completion = await client.chat.completions.create(
                 model=MODEL_NAME,
@@ -535,11 +518,7 @@ async def get_model_action(
                 text = f"[THOUGHT] [REASONING DISABLED]\n[COMMAND] {text}"
                 command = parse_command(text)
 
-        return (
-            text,
-            command,
-            ((None) if command else "Failed to parse command from model response"),
-        )
+        return (text, command, None)
     except Exception as exc:
         log_error(f"Model request failed: {exc}, type={type(exc).__name__}")
         # TOOD: detect Error code: 402 - {'error': 'You have depleted your monthly included credits. Purchase pre-paid credits to continue using Inference Providers. Alternatively, subscribe to PRO to get 20x more included usage.'}
@@ -582,10 +561,24 @@ class DockerProviderWithRandomPort(LocalDockerProvider):
         return self._url
 
 
-async def main() -> None:
+async def fetch_tasks(base_url: str) -> List[dict]:
+    from urllib import request
 
-    client = AsyncOpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    try:
+        with request.urlopen(f"{base_url}/tasks") as response:
+            if response.status != 200:
+                raise RuntimeError(
+                    f"Failed to fetch tasks, status code: {response.status}"
+                )
+            data = response.read()
+            tasks = json.loads(data)
+        return sorted(tasks, key=lambda t: t["threat_id"])
+    except Exception as e:
+        log_error(f"Failed to fetch tasks from environment: {e}")
+        sys.exit(1)
 
+
+async def initialize_environment() -> Tuple[AgentrologyEnv, str]:
     debug_print(f"Connecting to environment with image: {IMAGE_NAME}")
     provider = None
     kwargs = {"port": EXPOSE_PORT}
@@ -600,55 +593,8 @@ async def main() -> None:
         )
     except Exception as e:
         log_error(f"Failed to create environment from image '{IMAGE_NAME}': {e}")
-        try:
-            result = subprocess.run(
-                ["docker", "ps", "-a", "--format", "json"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            output = result.stdout
-            s = ""
-            for line in output.strip().splitlines():
-                if not line.strip():
-                    continue
-                container = json.loads(line)
-                name = container["Names"]
-                image = container["Image"]
-                s += f"({name}, {image}), "
-            log_error(f"Containers: {s}")
-        except Exception as e:
-            log_error(f"Failed to list containers: {e}")
-
-        try:
-            result = subprocess.run(
-                ["docker", "images", "--format", "json"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            output = result.stdout
-            s = ""
-            for line in output.strip().splitlines():
-                if not line.strip():
-                    continue
-                image = json.loads(line)
-                name = image["Repository"]
-                tag = image["Tag"]
-                createdAt = image["CreatedAt"]
-                s += f"({name}, {tag}, {createdAt}), "
-            log_error(f"Images: {s}")
-        except Exception as e:
-            log_error(f"Failed to list images: {e}")
-
-        log_start(
-            task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME, provider_url=API_BASE_URL
-        )
-        log_end(success=False, steps=0, score=0.0, rewards=[])
-        import time
-
-        time.sleep(5)  # give some time for logs to flush before exiting
         sys.exit(1)
+
     docker_container_name = (
         provider._container_name
         if provider and provider._container_name
@@ -661,8 +607,21 @@ async def main() -> None:
         f"Environment container exposed. Open your browser to {provider._url}/dashboard to view the web interface"
     )
 
+    if not provider._url:
+        log_error("Failed to determine environment URL from Docker provider.")
+        sys.exit(1)
+
+    return env, provider._url
+
+
+async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> None:
+    if not task_id:
+        log_error("Task ID is required to run the inference script.")
+        sys.exit(1)
+
+    TASK_NAME = task_id
+
     start_time = None
-    history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
     score = 0.0
@@ -676,20 +635,30 @@ async def main() -> None:
         step: int,
         raw_response: str,
         command: Optional[str],
+        thought: Optional[str],
         error: Optional[str],
         reward: float = 0.0,
         done: bool = False,
         blocked: bool = False,
+        security_violation: Optional[str] = None,
+        stdout: Optional[str] = None,
+        stderr: Optional[str] = None,
+        threats_count: Optional[int] = None,
     ) -> None:
         steps_history.append(
             {
                 "step": step,
                 "raw_response": raw_response,
                 "command": command,
+                "thought": thought,
                 "blocked": blocked,
                 "reward": reward,
                 "done": done,
                 "error": error,
+                "stdout": stdout,
+                "stderr": stderr,
+                "security_violation": security_violation,
+                "threats_count": threats_count,
             }
         )
 
@@ -698,7 +667,7 @@ async def main() -> None:
     )
 
     try:
-        result = await env.reset()
+        result = await env.reset(task_id=TASK_NAME)
         obs = result.observation
 
         total_threats = obs.active_threats
@@ -706,11 +675,14 @@ async def main() -> None:
         last_stderr = obs.stderr
         last_threats = obs.active_threats
         last_threat_ids = [t.threat_id for t in obs.threat_status if not t.neutralised]
+        last_security_violation = None
         last_reward = 0.0
         start_time = datetime.now()
         consistent_errors = 0
+        consisten_empty_llm_response_count = 0
+        step = 0
 
-        for step in range(1, MAX_STEPS + 1):
+        while step != MAX_STEPS:
             if result.done:
                 stop_reason = "Episode completed (done=True)"
                 break
@@ -722,66 +694,103 @@ async def main() -> None:
 
             # Get raw text (for history) and parsed command (for execution)
             raw_response, command, llm_inference_error = await get_model_action(
-                client,
-                step,
-                last_stdout,
-                last_stderr,
-                last_threats,
-                last_reward,
-                history,
+                client=client,
+                step=step + 1,
+                stdout=last_stdout,
+                stderr=last_stderr,
+                active_threats=last_threats,
+                last_security_violation=last_security_violation,
+                last_reward=last_reward,
+                history=steps_history,
             )
 
+            if llm_inference_error:
+                # must not count towards step
+                consistent_errors += 1
+                debug_print(
+                    "LLM inference error, skipping step without incrementing step count."
+                )
+                if consistent_errors >= 3:
+                    stop_reason = (
+                        "Terminating due to consistent error in LLM API calls."
+                        + f" Occurred {consistent_errors} times. Last error: {llm_inference_error}"
+                    )
+                    log_error(stop_reason)
+                    break
+                continue
+
+            step += 1
+            consistent_errors = 0  # reset error count on successful inference
             debug_print(f"[{step}] {raw_response}")
 
             if not command or command.strip() == "":
-                consistent_errors += 1
-                debug_print("No command generated by model, skipping step.")
+                consisten_empty_llm_response_count += 1
+                debug_print("No.Invalid command generated by model, skipping step.")
+                command = "[INVALID RESPONSE, Command must be after [COMMAND] block]"
                 add_command(
                     step=step,
                     raw_response=raw_response,
                     command=command,
+                    thought=None,
                     reward=0.0,
                     done=False,
                     error=llm_inference_error or "No command generated",
+                    blocked=False,
+                    stdout=None,
+                    stderr=None,
+                    security_violation=None,
+                    threats_count=last_threats,
                 )
 
-                command = "[INVALID RESPONSE, Command must be after [COMMAND] block]"
-                history.append(f"[S{step}] CMD={command} R=0.0 T={last_threats}")
-
-                if consistent_errors >= 5:
+                if consisten_empty_llm_response_count >= 5:
                     stop_reason = "Terminating due to consistent invalid responses from the model."
                     debug_print(stop_reason)
                     break
 
                 continue
 
+            consisten_empty_llm_response_count = 0  # reset empty response count
+
             if not AgentrologyAction.is_actionable_command(command):
                 limit = AgentrologyAction.get_command_len_limit()
                 debug_print(f"Command exceeds length limit {limit} chars")
+                msg = f"[ AGENTROLOGY ERROR ] ERR_BUF_OVERFLOW | LIMIT: {limit} chars | REASON: Input exceeded secure execution buffer. Command discarded."
                 add_command(
                     step=step,
                     raw_response=raw_response,
                     command=command,
+                    thought=None,
                     reward=0.0,
                     done=False,
                     error=f"Command length exceeds limit of {limit} chars",
                     blocked=True,
+                    stdout=None,
+                    stderr=None,
+                    security_violation=msg,
+                    threats_count=last_threats,
                 )
-                command = f"[COMMAND TOO LONG, skipped execution, allowable length is {limit} chars]"
-                history.append(f"[S{step}] CMD={command} R=0.0 T={last_threats}")
+                command = command[: min(len(command), 20)] + "... [TRUNCATED]"
+                last_security_violation = msg
+                last_stderr = ""
+                last_stdout = ""
+                last_reward = 0.0
+                rewards.append(0.0)
+                steps_taken = step
+
                 continue
 
-            consistent_errors = 0  # reset error count
+            blocked = False
 
             try:
                 result = await env.step(AgentrologyAction(command=command))
                 obs = result.observation
 
                 if result.observation.security_violation:
-                    debug_print("[COMMAND BLOCKED] Security violation")
+                    debug_print("[COMMAND BLOCKED] Security violation", False)
                 else:
                     debug_print(
-                        f"[COMMAND OUTPUT] stdout: {obs.stdout} stderr: {obs.stderr}"
+                        f"[COMMAND OUTPUT] stdout: {obs.stdout} stderr: {obs.stderr}",
+                        False,
                     )
 
                 reward = result.reward or 0.0
@@ -798,10 +807,21 @@ async def main() -> None:
                     step=step,
                     raw_response=raw_response,
                     command=command,
+                    thought=None,
                     error=error,
                     blocked=blocked,
                     reward=reward,
                     done=done,
+                    stdout=obs.stdout,
+                    stderr=obs.stderr,
+                    security_violation=(
+                        obs.security_violation
+                        if hasattr(obs, "security_violation")
+                        else None
+                    ),
+                    threats_count=(
+                        obs.active_threats if hasattr(obs, "active_threats") else None
+                    ),
                 )
             except Exception as exc:
                 log_error(f"Unexpected step error: {exc}")
@@ -811,10 +831,11 @@ async def main() -> None:
             rewards.append(reward)
             steps_taken = step
 
-            # Update state for next prompt
-            did_neutralize = obs.active_threats < last_threats
-            neutralized_threat_ids = []
-            if did_neutralize:
+            if obs.active_threats < last_threats:
+                debug_print(
+                    f"---------> Threat neutralized! Remaining: {obs.active_threats} <---------",
+                    False,
+                )
                 neutralized_threat_ids = list(
                     set(last_threat_ids)
                     - set(t.threat_id for t in obs.threat_status if not t.neutralised)
@@ -831,11 +852,12 @@ async def main() -> None:
 
             last_stdout = obs.stdout
             last_stderr = obs.stderr
+            last_reward = reward
             last_threats = obs.active_threats
+            last_security_violation = obs.security_violation
             last_threat_ids = [
                 t.threat_id for t in obs.threat_status if not t.neutralised
             ]
-            last_reward = reward
 
             log_step(
                 step=step,
@@ -846,34 +868,23 @@ async def main() -> None:
                 error=error,
             )
 
-            if did_neutralize:
-                debug_print(
-                    f"---------> Threat neutralized! Remaining: {obs.active_threats} <---------"
-                )
-
-            # threats = ""
-            # for t in obs.threat_status:
-            #     if t.neutralised:
-            #         continue
-            #     threats += f"{t.threat_id}({t.severity}), "
-
-            # Log history so the model doesn't get stuck in a loop
-            history.append(f"[S{step}] CMD={command} R={reward:+.2f} T={last_threats}")
-
             if done:
                 stop_reason = "Episode completed (done=True)"
                 break
 
         # Calculate final score
-        # We only sum positive rewards to avoid negative formatting penalties ruining the final score
+        # only sum positive rewards to avoid negative formatting penalties ruining the final score
         total_positive_reward = sum(r for r in rewards if r > 0)
         score = (
             total_positive_reward / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
         )
-        score = min(max(score, 0.0), 1.0)  # clamp to [0, 1]
-        success = score >= SUCCESS_SCORE_THRESHOLD
+        EPS = 1e-6
+        score = max(EPS, min(1 - EPS, score))
 
         end_time = datetime.now()
+        success = (
+            len(neutralization_checkpoints) == total_threats
+        ) and total_threats > 0
         benchmark_info = {
             "benchmark": BENCHMARK,
             "task": TASK_NAME,
@@ -881,6 +892,7 @@ async def main() -> None:
             "temperature": TEMPERATURE,
             "max_tokens": MAX_TOKENS,
             "max_steps": MAX_STEPS,
+            "reasoning_on": REASONING_MODE,
             "summary": {
                 "start_time": start_time.isoformat() if start_time else None,
                 "end_time": end_time.isoformat() if end_time else None,
@@ -905,28 +917,64 @@ async def main() -> None:
             "steps": steps_history,
         }
 
-        identifier = "".join(random.choices(string.ascii_letters + string.digits, k=4))
-        benchmark_file_name = f"{BENCHMARK}_{TASK_NAME}_{MODEL_NAME}_{identifier}.json"
+        if IS_SUBMISSION_ENV:
+            import time
 
-        # escape any characters in model name that might not be allowed in file names
-        benchmark_file_name = re.sub(r'[<>:"/\\|?*]', "_", benchmark_file_name)
+            not_important_keys = ["steps", "system_prompt", "checkpoints"]
+            for k in not_important_keys:
+                if k in benchmark_info:
+                    del benchmark_info[k]
+            send_direct_log(
+                json.dumps(
+                    {"event": "benchmark_result", "result": benchmark_info}, indent=2
+                ),
+                is_submission_env=IS_SUBMISSION_ENV,
+            )
+            time.sleep(1)
 
-        benchmark_path = os.path.join(
-            BENCHMARK_DIR,
-            benchmark_file_name,
-        )
-        os.makedirs(BENCHMARK_DIR, exist_ok=True)
-        with open(benchmark_path, "w") as f:
-            json.dump(benchmark_info, f, indent=4)
-            debug_print(f"Benchmark info saved to {benchmark_path}")
+        else:
+            identifier = "".join(
+                random.choices(string.ascii_letters + string.digits, k=4)
+            )
+            benchmark_file_name = (
+                f"{BENCHMARK}_{TASK_NAME}_{MODEL_NAME}_{identifier}.json"
+            )
+            benchmark_file_name = re.sub(r'[<>:"/\\|?*]', "_", benchmark_file_name)
+            benchmark_path = os.path.join(
+                BENCHMARK_DIR,
+                benchmark_file_name,
+            )
+            os.makedirs(BENCHMARK_DIR, exist_ok=True)
+            with open(benchmark_path, "w") as f:
+                json.dump(benchmark_info, f, indent=4)
+                debug_print(f"Benchmark info saved to {benchmark_path}")
 
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+    print()
+    print()
+
+
+async def main():
+    client = AsyncOpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    env, env_url = await initialize_environment()
+    tasks = await fetch_tasks(env_url)
+    print_config(tasks=tasks)
+
+    try:
+        for task in tasks:
+            await run_task(env, client, task_id=task["threat_id"])
+            await reset_bridge()
     finally:
         try:
             debug_print("Closing environment connection...")
             await env.close()
+
         except Exception as e:
             log_error(f"env.close() error (container cleanup): {e}")
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+    print("[INFO] Inference run completed.")
 
 
 if __name__ == "__main__":

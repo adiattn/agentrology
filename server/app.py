@@ -102,8 +102,13 @@ def should_intercept(request: Request) -> bool:
     return is_internal
 
 
+@app.get("/tasks")
+async def tasks():
+    return JSONResponse(get_env().get_tasks())
+
+
 @app.get("/trace")
-async def trace(request: Request):
+async def trace():
     return JSONResponse(get_env().get_trace())
 
 
