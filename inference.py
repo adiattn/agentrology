@@ -50,10 +50,11 @@ import os
 import random
 import re
 import string
+import subprocess
 import sys
 import textwrap
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils import init_logging, send_direct_log
 
@@ -77,7 +78,10 @@ def cli_parse_args():
         "--max-tokens", help="Max tokens for the LLM", type=int, default=150
     )
     parser.add_argument(
-        "--no-reasoning", help="Disable reasoning mode", action="store_true"
+        "--no-reasoning",
+        help="Disable reasoning mode",
+        action="store_true",
+        default=True,
     )
     parser.add_argument(
         "--interactive",
@@ -88,7 +92,7 @@ def cli_parse_args():
     parser.add_argument(
         "--image",
         help="Docker image name",
-        default=os.getenv("IMAGE_NAME", "agentrology-env:latest"),
+        default=os.getenv("LOCAL_IMAGE_NAME", "agentrology-env:latest"),
     )
     parser.add_argument("--log-file", help="Log file", default=os.getenv("LOG_FILE"))
     parser.add_argument(
@@ -97,7 +101,10 @@ def cli_parse_args():
         default=os.getenv("BENCHMARK_DIR", "benchmarks"),
     )
     parser.add_argument(
-        "--port", help="Port for the environment", type=int, default=8000
+        "--port",
+        help="Port for the environment, default: docker managed",
+        type=int,
+        default=0,
     )
 
     return parser.parse_args()
@@ -131,18 +138,25 @@ REASONING_MODE = (
     if args.no_reasoning
     else (os.getenv("REASONING_MODE", "true").lower() == "true")
 )
-IMAGE_NAME = os.getenv("IMAGE_NAME") or "agentrology-env:latest"
+IS_SUBMISSION_ENV = os.getenv("SHELL", "") != "/usr/bin/zsh"
+IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or (
+    "adityacd3/agentrology-env:latest"
+    if IS_SUBMISSION_ENV
+    else "agentrology-env:latest"
+)
 LOG_FILE = os.getenv(
     "LOG_FILE",
     f"logs/{BENCHMARK}_{TASK_NAME}_{MODEL_NAME.replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
 )
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.06"))
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "150"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "500"))
 SUCCESS_SCORE_THRESHOLD = 0.1  # normalized score in [0, 1]
 INTERACTIVE_MODE = os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
 WS_CONNECTION_TIMEOUT = int(os.getenv("WS_CONNECTION_TIMEOUT", "60"))
 BENCHMARK_DIR = os.getenv("BENCHMARK_DIR", "benchmarks")
-EXPOSE_PORT = int(os.getenv("EXPOSE_PORT", "8000"))
+EXPOSE_PORT = int(os.getenv("EXPOSE_PORT", "0"))
+if args.port:
+    EXPOSE_PORT = args.port
 
 from colorama import Fore, Style, init
 
@@ -151,7 +165,56 @@ init(autoreset=True)
 init_logging(LOG_FILE)
 
 
+def is_running_in_docker() -> bool:
+    path = "/proc/self/cgroup"
+    if os.path.exists("/.dockerenv"):
+        return True
+    if os.path.isfile(path):
+        try:
+            with open(path, "r") as f:
+                for line in f:
+                    if "docker" in line:
+                        return True
+        except Exception:
+            pass
+    return False
+
+
+def check_docker_image_exists(image_name: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", image_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def get_git_info() -> Tuple[bool, Optional[str]]:
+    try:
+        is_git = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--is-inside-work-tree"], text=True
+            )
+            .strip()
+            .lower()
+            == "true"
+        )
+        if is_git:
+            remote = subprocess.check_output(
+                ["git", "remote", "get-url", "origin"], text=True
+            ).strip()
+            return True, remote
+    except Exception:
+        pass
+    return False, None
+
+
 def color_print(msg, color, file=sys.stdout, flush=True):
+
     if file.isatty():
         print(f"{color}{msg}{Style.RESET_ALL}", file=file, flush=flush)
     else:
@@ -160,10 +223,19 @@ def color_print(msg, color, file=sys.stdout, flush=True):
 
 def print_config() -> None:
 
+    is_docker = is_running_in_docker()
+    image_exists = check_docker_image_exists(IMAGE_NAME)
+    is_git, git_remote = get_git_info()
+
     config_vars = {
         "IMAGE_NAME": IMAGE_NAME,
+        "IMAGE_EXISTS": image_exists,
+        "RUNNING_IN_DOCKER": is_docker,
+        "IS_GIT_DIR": is_git,
+        "GIT_REMOTE": git_remote,
         "LLM_MODE": "ollama" if args.ollama else "external",
         "OS": os.name,
+        "SHELL": os.getenv("SHELL", "unknown"),
         "API_BASE_URL": API_BASE_URL,
         "MODEL_NAME": MODEL_NAME,
         "TASK_NAME": TASK_NAME,
@@ -207,6 +279,8 @@ print_config()
 def debug_print(msg: str) -> None:
     if IS_DEV:
         color_print(f"[DEBUG] {msg}", Fore.YELLOW)
+    else:
+        send_direct_log(f"[DEBUG] {msg}")
 
 
 def log_error(msg: str) -> None:
@@ -472,24 +546,119 @@ async def get_model_action(
         return "Model Failed", "", str(exc)
 
 
+class DockerProviderWithRandomPort(LocalDockerProvider):
+    def __init__(self):
+        super().__init__()
+        self._url = None
+
+    def start_container(
+        self,
+        image: str,
+        port: Optional[int] = None,
+        env_vars: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ) -> str:
+        url = super().start_container(image, port, env_vars, **kwargs)
+        self._url = url
+        if isinstance(port, int) and port > 0:
+            return url
+
+        container_id: str | None = self._container_id
+        if not container_id:
+            raise RuntimeError("Container ID not found after starting container")
+
+        result = subprocess.run(
+            ["docker", "inspect", container_id],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        data = json.loads(result.stdout)
+        ports = data[0]["NetworkSettings"]["Ports"]["8000/tcp"]
+        port = int(ports[0]["HostPort"])
+
+        self._url = f"http://localhost:{port}"
+        return self._url
+
+
 async def main() -> None:
 
     client = AsyncOpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     debug_print(f"Connecting to environment with image: {IMAGE_NAME}")
-    provider = LocalDockerProvider()
-    env = await AgentrologyEnv.from_docker_image(
-        IMAGE_NAME,
-        provider=provider,
-        port=EXPOSE_PORT,
-        # env_vars={"ENABLE_WEB_INTERFACE": "true"}
+    provider = None
+    kwargs = {"port": EXPOSE_PORT}
+    provider = DockerProviderWithRandomPort()
+
+    try:
+        env = await AgentrologyEnv.from_docker_image(
+            IMAGE_NAME,
+            provider=provider,
+            **kwargs,
+            env_vars={"ENABLE_WEB_INTERFACE": "true" if IS_DEV else "false"},
+        )
+    except Exception as e:
+        log_error(f"Failed to create environment from image '{IMAGE_NAME}': {e}")
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "-a", "--format", "json"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            output = result.stdout
+            s = ""
+            for line in output.strip().splitlines():
+                if not line.strip():
+                    continue
+                container = json.loads(line)
+                name = container["Names"]
+                image = container["Image"]
+                s += f"({name}, {image}), "
+            log_error(f"Containers: {s}")
+        except Exception as e:
+            log_error(f"Failed to list containers: {e}")
+
+        try:
+            result = subprocess.run(
+                ["docker", "images", "--format", "json"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            output = result.stdout
+            s = ""
+            for line in output.strip().splitlines():
+                if not line.strip():
+                    continue
+                image = json.loads(line)
+                name = image["Repository"]
+                tag = image["Tag"]
+                createdAt = image["CreatedAt"]
+                s += f"({name}, {tag}, {createdAt}), "
+            log_error(f"Images: {s}")
+        except Exception as e:
+            log_error(f"Failed to list images: {e}")
+
+        log_start(
+            task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME, provider_url=API_BASE_URL
+        )
+        log_end(success=False, steps=0, score=0.0, rewards=[])
+        import time
+
+        time.sleep(5)  # give some time for logs to flush before exiting
+        sys.exit(1)
+    docker_container_name = (
+        provider._container_name
+        if provider and provider._container_name
+        else "[unknown]"
     )
-    docker_container_name = provider._container_name if provider._container_name else ""
     debug_print(
         "Environment connected successfully on container: " + docker_container_name
     )
     debug_print(
-        f"Environment container exposed on port: {EXPOSE_PORT}: Open your browser to http://localhost:{EXPOSE_PORT}/dashboard to view the web interface"
+        f"Environment container exposed. Open your browser to {provider._url}/dashboard to view the web interface"
     )
 
     start_time = None
@@ -748,8 +917,6 @@ async def main() -> None:
         )
         os.makedirs(BENCHMARK_DIR, exist_ok=True)
         with open(benchmark_path, "w") as f:
-            import json
-
             json.dump(benchmark_info, f, indent=4)
             debug_print(f"Benchmark info saved to {benchmark_path}")
 
