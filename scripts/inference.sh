@@ -26,6 +26,7 @@ API_KEY=$API_KEY
 IS_DEV="false"
 MAX_STEPS=${MAX_STEPS:-40}
 API_BASE_URL=""
+REASONING_MODE="true"
 
 print_help() {
   echo "Usage: ./run.sh [options]"
@@ -41,6 +42,15 @@ print_help() {
   echo "  --task <name>          Task name"
   echo "  --benchmark <name>     Benchmark name"
   echo "  --api-url <url>        Override API base URL"
+  echo "  --no-reasoning         Disable reasoning mode"
+  echo "  --image <name>         Docker image name"
+  echo "  --log-file <path>      Log file path"
+  echo "  --temperature <num>    Temperature for the LLM"
+  echo "  --max-tokens <num>     Max tokens per response"
+  echo "  --interactive          Enable interactive mode"
+  echo "  --ws-timeout <num>     WebSocket connection timeout in seconds"
+  echo "  --benchmark-dir <path> Directory to store benchmark results"
+  echo "  --port <num>           Port to expose the environment ui"
   echo "  --help                 Show this help"
 }
 
@@ -79,6 +89,42 @@ while [[ $# -gt 0 ]]; do
     API_BASE_URL="$2"
     shift 2
     ;;
+  --no-reasoning)
+    REASONING_MODE="false"
+    shift
+    ;;
+  --image)
+    IMAGE_NAME="$2"
+    shift 2
+    ;;
+  --log-file)
+    LOG_FILE_OVERRIDE="$2"
+    shift 2
+    ;;
+  --temperature)
+    TEMPERATURE="$2"
+    shift 2
+    ;;
+  --max-tokens)
+    MAX_TOKENS="$2"
+    shift 2
+    ;;
+  --interactive)
+    INTERACTIVE_MODE="true"
+    shift
+    ;;
+  --ws-timeout)
+    WS_CONNECTION_TIMEOUT="$2"
+    shift 2
+    ;;
+  --benchmark-dir)
+    BENCHMARK_DIR="$2"
+    shift 2
+    ;;
+  --port)
+    EXPOSE_PORT="$2"
+    shift 2
+    ;;
   --help | -h | --usage | h)
     print_help
     exit 0
@@ -95,7 +141,11 @@ mkdir -p logs
 # Env fallback
 IMAGE_NAME="${IMAGE_NAME:-agentrology-env:latest}"
 MODEL_NAME="${MODEL_NAME:-Qwen/Qwen2.5-72B-Instruct}"
-LOG_FILE="logs/${BENCHMARK}_${TASK_NAME}_${MODEL_NAME//\//_}_$(date +%Y%m%d_%H%M%S).log"
+if [ -n "$LOG_FILE_OVERRIDE" ]; then
+  LOG_FILE="$LOG_FILE_OVERRIDE"
+else
+  LOG_FILE="logs/${BENCHMARK}_${TASK_NAME}_${MODEL_NAME//\//_}_$(date +%Y%m%d_%H%M%S).log"
+fi
 
 # API URL resolution
 if [ -z "$API_BASE_URL" ]; then
@@ -121,6 +171,7 @@ print_config() {
   echo -e "${BLUE}[ INFO ]${RESET} MAX_STEPS       = ${MAX_STEPS}"
   echo -e "${BLUE}[ INFO ]${RESET} IS_DEV          = ${IS_DEV}"
   echo -e "${BLUE}[ INFO ]${RESET} LOG_FILE        = ${LOG_FILE}"
+  echo -e "${BLUE}[ INFO ]${RESET} REASONING_MODE  = ${REASONING_MODE}"
 }
 
 print_header
@@ -166,6 +217,15 @@ IS_DEV="$IS_DEV" \
   BENCHMARK="$BENCHMARK" \
   HF_TOKEN="$HF_TOKEN" \
   API_KEY="$API_KEY" \
+  REASONING_MODE="$REASONING_MODE" \
+  IMAGE_NAME="${IMAGE_NAME:-}" \
+  LOG_FILE="${LOG_FILE:-}" \
+  TEMPERATURE="${TEMPERATURE:-}" \
+  MAX_TOKENS="${MAX_TOKENS:-}" \
+  INTERACTIVE_MODE="${INTERACTIVE_MODE:-}" \
+  WS_CONNECTION_TIMEOUT="${WS_CONNECTION_TIMEOUT:-}" \
+  BENCHMARK_DIR="${BENCHMARK_DIR:-}" \
+  EXPOSE_PORT="${EXPOSE_PORT:-}" \
   uv run inference.py 2>&1 | tee "$LOG_FILE"
 
 STATUS=${PIPESTATUS[0]}

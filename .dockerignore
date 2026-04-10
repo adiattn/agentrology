@@ -100,4 +100,5 @@ scripts/
 .pre-commit-config.yaml
 .ruff_cache
 .venv
-benchmarks
+.benchmarks
+inference.py

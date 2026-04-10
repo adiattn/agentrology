@@ -1604,6 +1604,7 @@ name = "openenv-agentrology"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "colorama" },
     { name = "openenv-core", extra = ["core"] },
     { name = "pre-commit" },
 ]
@@ -1616,6 +1617,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "colorama", specifier = ">=0.4.6" },
     { name = "openenv-core", extras = ["core"], specifier = ">=0.2.2" },
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },

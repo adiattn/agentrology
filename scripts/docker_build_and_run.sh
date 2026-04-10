@@ -3,7 +3,7 @@
 IMAGE_NAME="agentrology-env:latest"
 CONTAINER_NAME="agentrology-container"
 PORT="8000"
-
+LOGGING_LEVEL=${LOGGING_LEVEL:-DEBUG}
 SKIP_BUILD=false
 ENABLE_WEB=false
 BASH=false
@@ -128,6 +128,10 @@ if [ "$ENABLE_WEB" = true ]; then
   info "ENABLE_WEB_INTERFACE=true"
   DOCKER_ENV_ARGS+=("-e" "ENABLE_WEB_INTERFACE=true")
 fi
+
+DOCKER_ENV_ARGS+=("-e" "LOGGING_LEVEL=$LOGGING_LEVEL")
+
+info "LOGGING_LEVEL=$LOGGING_LEVEL"
 
 log "Starting container..."
 

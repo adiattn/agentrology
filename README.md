@@ -122,6 +122,7 @@ The repository contains a test script to ensure the command validator correctly 
 
 ```bash
 uv run python -m tests.test_command_validator
+uv run python -m tests.self_kill_protection
 ```
 
 ### Deployment to Hugging Face Spaces

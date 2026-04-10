@@ -29,8 +29,26 @@ Usage:
     python -m server.app
 """
 
+import glob
+import json
+import logging
+import logging.config
+import os
+
+import yaml
 from fastapi import Request
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
+
+logging_config_path = os.path.join(os.path.dirname(__file__), "config", "logging.yaml")
+with open(logging_config_path) as f:
+    config = yaml.safe_load(f)
+
+LOGGING_LEVEL = os.getenv("LOGGING_LEVEL", "INFO")
+config["root"]["level"] = LOGGING_LEVEL
+config["loggers"]["uvicorn.error"]["level"] = LOGGING_LEVEL
+config["loggers"]["uvicorn.access"]["level"] = LOGGING_LEVEL
+
+logging.config.dictConfig(config)
 
 try:
     from openenv.core.env_server.http_server import create_app
@@ -48,9 +66,21 @@ except ModuleNotFoundError:
     from server.agentrology_environment import AgentrologyEnvironment
 
 
+_env: AgentrologyEnvironment | None = None
+
+
+def get_env() -> AgentrologyEnvironment:
+    global _env
+    if _env is None:
+        _env = AgentrologyEnvironment()
+        # reset env
+        _env.reset()
+    return _env
+
+
 # Create the app with web interface and README integration
 app = create_app(
-    AgentrologyEnvironment,
+    get_env,
     AgentrologyAction,
     AgentrologyObservation,
     env_name="agentrology",
@@ -70,6 +100,51 @@ def should_intercept(request: Request) -> bool:
         or client_host == "::1"
     )
     return is_internal
+
+
+@app.get("/trace")
+async def trace(request: Request):
+    return JSONResponse(get_env().get_trace())
+
+
+@app.get("/benchmarks", response_class=HTMLResponse)
+async def benchmarks_ui():
+    ui_path = os.path.join(os.path.dirname(__file__), "ui", "index.html")
+    try:
+        with open(ui_path, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "UI file not found. Ensure server/ui/index.html exists."
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_ui():
+    ui_path = os.path.join(os.path.dirname(__file__), "ui", "dashboard.html")
+    try:
+        with open(ui_path, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "UI file not found. Ensure server/ui/dashboard.html exists."
+
+
+@app.get("/api/benchmarks")
+async def list_benchmarks():
+    benchmarks_dir = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "benchmarks"
+    )
+    if not os.path.exists(benchmarks_dir):
+        return []
+
+    benchmark_files = glob.glob(os.path.join(benchmarks_dir, "*.json"))
+    results = []
+    for bf in benchmark_files:
+        try:
+            with open(bf, "r") as f:
+                data = json.load(f)
+                results.append(data)
+        except Exception as e:
+            logging.error(f"Error reading benchmark {bf}: {e}")
+    return results
 
 
 @app.middleware("http")

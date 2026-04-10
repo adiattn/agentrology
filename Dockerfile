@@ -69,6 +69,18 @@ RUN apt-get update && \
   lsof \
   cron \
   iproute2 \
+  psmisc \
+  strace \
+  tcpdump \
+  netcat-openbsd \
+  dnsutils \
+  curl \
+  file \
+  grep \
+  findutils \
+  iputils-ping \
+  less \
+  jq \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from builder
@@ -98,4 +110,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Run the FastAPI server AND start the cron daemon for Task 3
 # The module path is constructed to work with the /app/env structure
-CMD ["sh", "-c", "service cron start && cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000 --log-level debug"]
+CMD ["sh", "-c", "service cron start && cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000 --log-config /app/env/server/config/logging.yaml --ws-ping-interval=60 --ws-ping-timeout=300"]

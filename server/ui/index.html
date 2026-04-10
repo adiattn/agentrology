@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentrology Benchmarks</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=VT323&family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #f4f4f8;
+            --grid-color: #dcdce1;
+            --primary: #0077b6;
+            --secondary: #c9184a;
+            --text-main: #2b2d42;
+            --text-dim: #5c677d;
+            --success: #008f39;
+            --danger: #d90429;
+            --surface: #ffffff;
+            --border-color: #2b2d42;
+            --border-width: 2px;
+        }
+
+        body {
+            font-family: 'JetBrains Mono', 'VT323', monospace;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            background-image:
+                linear-gradient(var(--grid-color) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+            background-size: 30px 30px;
+            font-size: 1.2rem;
+        }
+
+        h1, h2, h3 {
+            font-family: 'Press Start 2P', cursive;
+            text-transform: uppercase;
+        }
+
+        header {
+            padding: 40px 20px;
+            text-align: center;
+        }
+
+        h1 {
+            color: var(--primary);
+            font-size: 1.8rem;
+            margin: 0;
+            letter-spacing: 2px;
+        }
+
+        .subtitle {
+            color: var(--secondary);
+            margin-top: 15px;
+            font-size: 1.2rem;
+            letter-spacing: 1px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .dashboard-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background-color: var(--surface);
+            border: var(--border-width) solid var(--primary);
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 1.2rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 1.5rem;
+            margin-top: 15px;
+            color: var(--text-main);
+        }
+
+        .benchmarks-container {
+            border: var(--border-width) solid var(--secondary);
+            background-color: var(--surface);
+            padding: 2px;
+        }
+
+        .benchmarks-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .benchmarks-table th {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 0.8rem;
+            color: var(--secondary);
+            text-align: left;
+            padding: 15px;
+            border-bottom: var(--border-width) dashed var(--border-color);
+        }
+
+        .benchmarks-table td {
+            padding: 15px;
+            border-bottom: 2px dotted rgba(255, 255, 255, 0.2);
+            vertical-align: middle;
+        }
+
+        .benchmarks-table tr {
+            transition: all 0.2s ease;
+        }
+
+        .benchmarks-table tr:hover {
+            background-color: rgba(0, 119, 182, 0.08); /* slight primary tint */
+            cursor: pointer;
+            box-shadow: inset 6px 0 0 var(--primary);
+        }
+
+        .cell-model {
+            color: var(--primary);
+            font-weight: bold;
+            font-size: 1.4rem;
+        }
+
+        .cell-task {
+            color: var(--text-dim);
+            font-size: 1.1rem;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border: var(--border-width) solid;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+        }
+
+        .status-success {
+            border-color: var(--success);
+            color: var(--success);
+        }
+
+        .status-failed {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .score-bar-bg {
+            height: 10px;
+            background-color: transparent;
+            border: 2px solid var(--border-color);
+            margin-top: 5px;
+            width: 100%;
+            max-width: 200px;
+        }
+
+        .score-bar-fill {
+            height: 100%;
+            background-color: var(--text-main);
+        }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(0, 0, 0, 0.85);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background-color: var(--surface);
+            border: 4px solid var(--primary);
+            width: 100%;
+            max-width: 1000px;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 2px dashed var(--primary);
+            background-color: var(--surface);
+            position: sticky;
+            top: 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .modal-title {
+            color: var(--primary);
+            font-size: 1rem;
+            margin: 0;
+        }
+
+        .close-btn {
+            background: none;
+            border: 2px solid var(--primary);
+            color: var(--primary);
+            font-family: 'Press Start 2P', cursive;
+            font-size: 1rem;
+            cursor: pointer;
+            padding: 5px 10px;
+        }
+
+        .close-btn:hover {
+            background-color: var(--primary);
+            color: var(--bg-color);
+        }
+
+        .modal-body {
+            padding: 20px;
+        }
+
+        .section-title {
+            font-family: 'Press Start 2P', cursive;
+            color: var(--secondary);
+            font-size: 0.9rem;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .info-item {
+            border: 2px solid var(--border-color);
+            padding: 10px;
+            background: rgba(255,255,255,0.02);
+            word-break: break-all;
+        }
+
+        .info-label {
+            color: var(--primary);
+            font-size: 1rem;
+            text-transform: uppercase;
+        }
+
+        .info-value {
+            font-size: 1.2rem;
+            margin-top: 5px;
+            color: var(--text-main);
+        }
+
+        .box-container {
+            border: 2px solid var(--border-color);
+            padding: 15px;
+            background: #ffffff;
+            box-shadow: inset 4px 4px 0px rgba(0,0,0,0.05);
+            max-height: 200px;
+            overflow-y: auto;
+            color: var(--text-main);
+            font-size: 0.95rem;
+            white-space: pre-wrap;
+            margin-bottom: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            line-height: 1.4;
+        }
+
+        .step-item {
+            border: 2px solid var(--border-color);
+            margin-bottom: 15px;
+            padding: 15px;
+        }
+
+        .step-header {
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 2px dashed rgba(255,255,255,0.2);
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+
+        .step-command {
+            color: var(--secondary);
+            font-size: 1.3rem;
+            margin-bottom: 10px;
+        }
+
+        .step-meta {
+            font-size: 1rem;
+            color: var(--text-dim);
+        }
+
+        .loader {
+            text-align: center;
+            font-family: 'Press Start 2P', cursive;
+            color: var(--primary);
+            padding: 40px;
+            animation: blink 1s infinite step-end;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        ::-webkit-scrollbar {
+            width: 12px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-color);
+            border-left: 2px solid var(--border-color);
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: var(--primary);
+            border: 2px solid var(--bg-color);
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>[ Benchmark System ]</h1>
+        <div class="subtitle">System Monitor v1.0</div>
+    </header>
+
+    <div class="container">
+        <div class="dashboard-stats" id="stats-container">
+            <div class="loader">LOADING_SYSTEM_DATA...</div>
+        </div>
+
+        <div class="benchmarks-container">
+            <table class="benchmarks-table" id="benchmarks-table">
+                <thead>
+                    <tr>
+                        <th>MODEL / TASK</th>
+                        <th>SCORE</th>
+                        <th>THREATS</th>
+                        <th>TIME</th>
+                        <th>STATUS</th>
+                    </tr>
+                </thead>
+                <tbody id="benchmarks-body">
+                    <tr><td colspan="5" class="loader">FETCHING_RECORDS...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modal" onclick="if(event.target === this) closeModal()">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">BENCHMARK_OBSERVATION</h2>
+                <button class="close-btn" onclick="closeModal()">X</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Content generated via JS -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allBenchmarks = [];
+
+        async function fetchBenchmarks() {
+            try {
+                const res = await fetch('/api/benchmarks');
+                if(!res.ok) throw new Error('API Error');
+                const data = await res.json();
+                allBenchmarks = data.sort((a,b) => {
+                    const tA = new Date(a.summary.start_time).getTime() || 0;
+                    const tB = new Date(b.summary.start_time).getTime() || 0;
+                    return tB - tA; // desc
+                });
+                renderDashboard();
+            } catch (err) {
+                console.error(err);
+                document.getElementById('benchmarks-body').innerHTML =
+                    `<tr><td colspan="5" style="text-align:center; color:var(--danger)">ERROR_LOADING_DATA</td></tr>`;
+            }
+        }
+
+        function renderDashboard() {
+            const tbody = document.getElementById('benchmarks-body');
+            const statsContainer = document.getElementById('stats-container');
+
+            if (allBenchmarks.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-dim)">NO_DATA_FOUND</td></tr>`;
+                statsContainer.innerHTML = '';
+                return;
+            }
+
+            const totalRuns = allBenchmarks.length;
+            const successRuns = allBenchmarks.filter(b => b.summary.success).length;
+            const successRate = ((successRuns / totalRuns) * 100).toFixed(0);
+            const threatsNeutralized = allBenchmarks.reduce((acc, b) => acc + b.summary.neutralized_threats, 0);
+
+            statsContainer.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-label">RUNS</div>
+                    <div class="stat-value">${totalRuns}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">SUCCESS%</div>
+                    <div class="stat-value" style="color: ${successRate > 50 ? 'var(--success)' : 'inherit'}">${successRate}%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">THREATS KILLED</div>
+                    <div class="stat-value">${threatsNeutralized}</div>
+                </div>
+            `;
+
+            tbody.innerHTML = '';
+
+            allBenchmarks.forEach((bench, index) => {
+                const s = bench.summary;
+                const scoreColor = s.success ? 'var(--success)' : 'var(--danger)';
+                const date = new Date(s.start_time).toLocaleString();
+
+                const tr = document.createElement('tr');
+                tr.onclick = () => openModal(index);
+                tr.innerHTML = `
+                    <td>
+                        <div class="cell-model">> ${bench.model}</div>
+                        <div class="cell-task">[${bench.benchmark}] ${bench.task}</div>
+                        <div style="font-size:0.9rem; color:var(--text-dim); margin-top:5px;">${date}</div>
+                    </td>
+                    <td>
+                        <div style="color: ${scoreColor}">${s.final_score.toFixed(2)}</div>
+                        <div class="score-bar-bg">
+                            <div class="score-bar-fill" style="width: ${s.final_score * 100}%; background-color: ${scoreColor}"></div>
+                        </div>
+                    </td>
+                    <td>
+                        <div>${s.neutralized_threats} / ${s.total_threats}</div>
+                        <div style="font-size:0.9rem; color:var(--text-dim)">STEPS: ${s.steps_taken}/${bench.max_steps}</div>
+                    </td>
+                    <td>
+                        ${s.time_taken ? s.time_taken.toFixed(1) + 's' : 'N/A'}
+                    </td>
+                    <td>
+                        <span class="status-badge ${s.success ? 'status-success' : 'status-failed'}">
+                            ${s.success ? 'SUCCESS' : 'FAILED'}
+                        </span>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function openModal(index) {
+            const bench = allBenchmarks[index];
+            const s = bench.summary;
+            const modalBody = document.getElementById('modal-body');
+
+            // Checkpoints HTML
+            let checkpointsHtml = '';
+            if(bench.checkpoints && bench.checkpoints.length > 0) {
+                checkpointsHtml = `
+                    <div class="section-title">THREAT_NEUTRALIZATION_LOG</div>
+                    <div style="margin-bottom: 20px;">
+                        ${bench.checkpoints.map(cp => `
+                            <div style="border:1px dashed var(--success); padding:10px; margin-bottom:5px; color:var(--success);">
+                                [STEP_${cp.step}] THREAT_KILLED: ${cp.threat_id} (RWD: +${cp.reward}) - ${new Date(cp.time).toLocaleTimeString()}
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+
+            // Steps HTML
+            let stepsHtml = '';
+            if(bench.steps && bench.steps.length > 0) {
+                bench.steps.forEach(step => {
+                    const statusStr = step.done ? 'DONE' : (step.blocked ? 'BLOCKED' : (step.error ? 'ERROR' : 'OK'));
+                    const statusColor = step.done ? 'var(--success)' : (step.error || step.blocked ? 'var(--danger)' : 'var(--text-main)');
+
+                    stepsHtml += `
+                    <div class="step-item">
+                        <div class="step-header">
+                            <span>STEP_${step.step}</span>
+                            <span style="color: ${step.reward > 0 ? 'var(--success)' : 'var(--text-dim)'}">RWD: ${step.reward.toFixed(2)}</span>
+                        </div>
+                        <div class="step-command">> ${step.command ? step.command.replace(/</g, "&lt;").replace(/>/g, "&gt;") : 'NULL_COMMAND'}</div>
+                        <div class="step-meta">
+                            <span style="color: ${statusColor}">STATUS: ${statusStr}</span>
+                        </div>
+                        ${step.error && typeof step.error === 'string' ? `<div style="margin-top:10px; color:var(--danger)">ERR: ${step.error}</div>` : ''}
+                    </div>`;
+                });
+            } else {
+                stepsHtml += '<div class="step-item">NO_TRACE_RECORDED</div>';
+            }
+
+            modalBody.innerHTML = `
+                <div class="section-title" style="margin-top:0;">ENVIRONMENT_CONFIGURATION</div>
+                <div class="info-grid">
+                    <div class="info-item"><div class="info-label">MODEL</div><div class="info-value" style="color:var(--primary)">${bench.model}</div></div>
+                    <div class="info-item"><div class="info-label">BENCHMARK</div><div class="info-value">${bench.benchmark}</div></div>
+                    <div class="info-item"><div class="info-label">TASK</div><div class="info-value">${bench.task}</div></div>
+                    <div class="info-item"><div class="info-label">API BASE URL</div><div class="info-value" style="font-size:1rem">${bench.api_base_url || 'N/A'}</div></div>
+                    <div class="info-item"><div class="info-label">TEMPERATURE</div><div class="info-value">${bench.temperature}</div></div>
+                    <div class="info-item"><div class="info-label">MAX TOKENS</div><div class="info-value">${bench.max_tokens}</div></div>
+                    <div class="info-item"><div class="info-label">MAX STEPS</div><div class="info-value">${bench.max_steps}</div></div>
+                </div>
+
+                <div class="section-title">EXECUTION_SUMMARY</div>
+                <div class="info-grid">
+                    <div class="info-item"><div class="info-label">START TIME</div><div class="info-value" style="font-size:1rem">${s.start_time ? new Date(s.start_time).toLocaleString() : 'N/A'}</div></div>
+                    <div class="info-item"><div class="info-label">END TIME</div><div class="info-value" style="font-size:1rem">${s.end_time ? new Date(s.end_time).toLocaleString() : 'N/A'}</div></div>
+                    <div class="info-item"><div class="info-label">TIME TAKEN</div><div class="info-value">${s.time_taken ? s.time_taken.toFixed(2) + ' sec' : 'N/A'}</div></div>
+                    <div class="info-item"><div class="info-label">OUTCOME</div><div class="info-value" style="color:${s.success ? 'var(--success)' : 'var(--danger)'}">${s.success ? 'SUCCESS' : 'FAILED'}</div></div>
+                    <div class="info-item"><div class="info-label">FINAL SCORE</div><div class="info-value">${s.final_score.toFixed(3)}</div></div>
+                    <div class="info-item"><div class="info-label">STOP REASON</div><div class="info-value" style="color:var(--secondary); font-size:1rem">${s.stop_reason}</div></div>
+                </div>
+
+                <div class="section-title">SYSTEM_PROMPT</div>
+                <div class="box-container">${bench.system_prompt || 'NO_SYSTEM_PROMPT_FOUND'}</div>
+
+                ${checkpointsHtml}
+
+                <div class="section-title">TRACE_LOGS (${bench.steps ? bench.steps.length : 0} COMMANDS)</div>
+                ${stepsHtml}
+            `;
+
+            document.getElementById('modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('active');
+        }
+
+        fetchBenchmarks();
+        setInterval(fetchBenchmarks, 30000);
+    </script>
+</body>
+</html>

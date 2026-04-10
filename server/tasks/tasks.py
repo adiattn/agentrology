@@ -7,27 +7,6 @@ of that threat's remediation requirements have been satisfied. A score
 of 1.0 means the threat is fully neutralised. Intermediate scores
 represent partial progress and are awarded to give the reward function
 a meaningful gradient.
-
-Difficulty design
-─────────────────
-T01  LOW      Single condition  → binary  0.0 / 1.0
-T02  LOW      Single condition  → binary  0.0 / 1.0
-T03  MEDIUM   Two conditions, equal weight → 0.0 / 0.5 / 1.0
-T04  MEDIUM   Two conditions, equal weight → 0.0 / 0.5 / 1.0
-T05  HIGH     Self-healing artefact + ordering constraint.
-              The syslog payload re-creates its persistence hook every
-              3 seconds while alive. The agent must kill the process
-              FIRST, then delete the hook. Deleting the hook while the
-              process still runs earns 0.3 (shows awareness) but the
-              file will be recreated before the next grade.
-              Score: process_dead × 0.4  +  hook_gone × 0.6
-T06  CRITICAL Three conditions + self-healing. The privesc payload
-              continuously overwrites both artefact files every 2 s.
-              Deleting files while the process is alive earns partial
-              credit but they will reappear. Agent must kill the process
-              then clean up in subsequent steps.
-              Score: process_dead × 0.34  +  sudo_gone × 0.33  +
-                     shadow_gone × 0.33
 """
 
 from __future__ import annotations
@@ -51,7 +30,7 @@ class CryptoMinerTask(ThreatTask):
     threat_id = "T01"
     label = "Rogue crypto-miner process"
     severity = "LOW"
-    conditions = ["process_dead"]
+    conditions = ["process_dead (0.5)", "script_deleted (0.5)"]
 
     _SCRIPT = "/tmp/crypto_miner_sim.py"
 
@@ -63,9 +42,15 @@ class CryptoMinerTask(ThreatTask):
 
     def teardown(self) -> None:
         self._pkill("crypto_miner_sim.py")
+        self._remove(self._SCRIPT)
 
     def grade(self) -> float:
-        return 0.0 if self._pgrep("crypto_miner_sim.py") else 1.0
+        score = 0.0
+        if not self._pgrep("crypto_miner_sim.py"):
+            score += 0.5
+        if not self._exists(self._SCRIPT):
+            score += 0.5
+        return round(score, 2)
 
 
 class HttpListenerTask(ThreatTask):
@@ -104,7 +89,7 @@ class CronBackdoorTask(ThreatTask):
     threat_id = "T03"
     label = "Persistent cron backdoor"
     severity = "MEDIUM"
-    conditions = ["process_dead (0.5)", "crontab_clean (0.5)"]
+    conditions = ["process_dead (0.4)", "crontab_clean (0.3)", "script_deleted (0.3)"]
 
     _SCRIPT = "/tmp/reverse_shell_sim.py"
     _CRON_ENTRY = "* * * * * python3 /tmp/reverse_shell_sim.py\n"
@@ -119,12 +104,13 @@ class CronBackdoorTask(ThreatTask):
     def teardown(self) -> None:
         self._pkill("reverse_shell_sim.py")
         subprocess.run(["crontab", "-r"], **_DEVNULL)
+        self._remove(self._SCRIPT)
 
     def grade(self) -> float:
         score = 0.0
 
         if not self._pgrep("reverse_shell_sim.py"):
-            score += 0.5
+            score += 0.4
 
         cron_has_entry = (
             subprocess.run(
@@ -136,7 +122,10 @@ class CronBackdoorTask(ThreatTask):
             == 0
         )
         if not cron_has_entry:
-            score += 0.5
+            score += 0.3
+
+        if not self._exists(self._SCRIPT):
+            score += 0.3
 
         return round(score, 2)
 
@@ -163,7 +152,11 @@ class DataExfilTask(ThreatTask):
     threat_id = "T04"
     label = "Data exfiltration agent"
     severity = "MEDIUM"
-    conditions = ["process_dead (0.5)", "staging_file_deleted (0.5)"]
+    conditions = [
+        "process_dead (0.4)",
+        "staging_file_deleted (0.3)",
+        "script_deleted (0.3)",
+    ]
 
     _SCRIPT = "/tmp/data_exfil_sim.py"
     _DUMP = "/tmp/exfil_dump.txt"
@@ -184,15 +177,19 @@ class DataExfilTask(ThreatTask):
     def teardown(self) -> None:
         self._pkill("data_exfil_sim.py")
         self._remove(self._DUMP)
+        self._remove(self._SCRIPT)
 
     def grade(self) -> float:
         score = 0.0
 
         if not self._pgrep("data_exfil_sim.py"):
-            score += 0.5
+            score += 0.4
 
         if not self._exists(self._DUMP):
-            score += 0.5
+            score += 0.3
+
+        if not self._exists(self._SCRIPT):
+            score += 0.3
 
         return round(score, 2)
 
@@ -213,8 +210,9 @@ class SyslogDaemonTask(ThreatTask):
     label = "Self-healing disguised syslog daemon"
     severity = "HIGH"
     conditions = [
-        "process_dead (0.4) — must come FIRST or hook regenerates",
-        "hook_file_deleted (0.6)",
+        "process_dead (0.3) — must come FIRST or hook regenerates",
+        "hook_file_deleted (0.4)",
+        "script_deleted (0.3)",
     ]
 
     _SCRIPT = "/tmp/syslog_monitor_sim.py"
@@ -240,15 +238,19 @@ class SyslogDaemonTask(ThreatTask):
     def teardown(self) -> None:
         self._pkill("syslog_monitor_sim.py")
         self._remove(self._HOOK)
+        self._remove(self._SCRIPT)
 
     def grade(self) -> float:
         score = 0.0
 
         if not self._pgrep("syslog_monitor_sim.py"):
-            score += 0.4
+            score += 0.3
 
         if not self._exists(self._HOOK):
-            score += 0.6
+            score += 0.4
+
+        if not self._exists(self._SCRIPT):
+            score += 0.3
 
         return round(score, 2)
 
@@ -270,9 +272,10 @@ class PrivescTask(ThreatTask):
     label = "Self-healing privilege escalation kit"
     severity = "CRITICAL"
     conditions = [
-        "process_dead (0.34) — must come FIRST or artefacts regenerate",
-        "sudo_rule_deleted (0.33)",
-        "shadow_fragment_deleted (0.33)",
+        "process_dead (0.3) — must come FIRST or artefacts regenerate",
+        "sudo_rule_deleted (0.2)",
+        "shadow_fragment_deleted (0.3)",
+        "script_deleted (0.2)",
     ]
 
     _SCRIPT = "/tmp/privesc_sim.py"
@@ -305,25 +308,27 @@ class PrivescTask(ThreatTask):
         self._pkill("privesc_sim.py")
         self._remove(self._SUDO)
         self._remove(self._SHADOW)
+        self._remove(self._SCRIPT)
 
     def grade(self) -> float:
         score = 0.0
 
         if not self._pgrep("privesc_sim.py"):
-            score += 0.34
+            score += 0.3
 
         if not self._exists(self._SUDO):
-            score += 0.33
+            score += 0.2
 
         if not self._exists(self._SHADOW):
-            score += 0.33
+            score += 0.3
+
+        if not self._exists(self._SCRIPT):
+            score += 0.2
 
         return round(score, 2)
 
 
 #  Registry
-
-#: Canonical ordered list of all threat tasks (T01 → T06).
 ALL_TASKS: list[ThreatTask] = [
     CryptoMinerTask(),
     HttpListenerTask(),

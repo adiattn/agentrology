@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Active Threat Dashboard</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=VT323&family=Press+Start+2P&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #f4f4f8;
+            --grid-color: #dcdce1;
+            --primary: #0077b6;
+            --secondary: #c9184a;
+            --text-main: #2b2d42;
+            --text-dim: #5c677d;
+            --success: #3a86ff;
+            --danger: #d90429;
+            --warning: #ff8c00;
+            --surface: #ffffff;
+            --border-color: #2b2d42;
+            --border-width: 2px;
+        }
+
+        body {
+            font-family: 'JetBrains Mono', 'VT323', monospace;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            background-image:
+                linear-gradient(var(--grid-color) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+            background-size: 30px 30px;
+            font-size: 1.2rem;
+        }
+
+        h1,
+        h2,
+        h3 {
+            font-family: 'Press Start 2P', cursive;
+            text-transform: uppercase;
+        }
+
+        header {
+            padding: 40px 20px;
+            text-align: center;
+        }
+
+        h1 {
+            color: var(--secondary);
+            font-size: 1.8rem;
+            margin: 0;
+            letter-spacing: 2px;
+        }
+
+        .subtitle {
+            color: var(--text-dim);
+            margin-top: 15px;
+            font-size: 1.2rem;
+            letter-spacing: 1px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .dashboard-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background-color: var(--surface);
+            border: var(--border-width) solid var(--border-color);
+            padding: 20px;
+            text-align: center;
+            box-shadow: 4px 4px 0px var(--border-color);
+        }
+
+        .stat-label {
+            font-size: 1.2rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 1.8rem;
+            margin-top: 15px;
+            color: var(--primary);
+        }
+
+        .threats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .threat-card {
+            background-color: var(--surface);
+            border: 2px solid var(--border-color);
+            padding: 12px;
+            position: relative;
+            box-shadow: 4px 4px 0px var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .threat-card:hover {
+            transform: translate(-1px, -1px);
+            box-shadow: 6px 6px 0px var(--border-color);
+        }
+
+        .threat-card.status-active {
+            border-color: var(--danger);
+            box-shadow: 4px 4px 0px var(--danger);
+        }
+
+        .threat-card.status-active:hover {
+            box-shadow: 6px 6px 0px var(--danger);
+        }
+
+        .threat-card.status-neutralised {
+            border-color: var(--success);
+            box-shadow: 4px 4px 0px var(--success);
+        }
+
+        .threat-card.status-neutralised:hover {
+            box-shadow: 6px 6px 0px var(--success);
+        }
+
+        .threat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px dashed var(--border-color);
+            padding-bottom: 8px;
+        }
+
+        .threat-id {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 0.7rem;
+            margin: 0;
+            color: var(--primary);
+        }
+
+        .threat-severity {
+            background-color: var(--warning);
+            color: #fff;
+            padding: 4px 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: bold;
+            border: 1px solid var(--border-color);
+            text-transform: uppercase;
+        }
+
+        .severity-high {
+            background-color: var(--danger);
+        }
+
+        .severity-medium {
+            background-color: var(--warning);
+        }
+
+        .severity-low {
+            background-color: var(--primary);
+        }
+
+        .threat-label {
+            font-size: 0.85rem;
+            color: var(--text-main);
+            font-weight: bold;
+            line-height: 1.2;
+            word-break: break-word;
+        }
+
+        .threat-status-bar {
+            text-align: center;
+            padding: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: bold;
+            color: white;
+            border: 1px solid var(--border-color);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: 1px 1px 0px rgba(0,0,0,0.3);
+        }
+
+        .status-active-bar { background-color: var(--danger); }
+        .status-neutralised-bar { background-color: var(--success); }
+
+        .show-conditions-btn {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            padding: 4px;
+            cursor: pointer;
+            text-transform: uppercase;
+            width: 100%;
+            margin-top: auto;
+        }
+
+        .show-conditions-btn:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(43, 45, 66, 0.8);
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .modal-content {
+            background-color: var(--surface);
+            border: 4px solid var(--border-color);
+            box-shadow: 10px 10px 0px var(--border-color);
+            width: 100%;
+            max-width: 600px;
+            padding: 30px;
+            position: relative;
+        }
+
+        .close-modal {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            font-size: 2rem;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .modal-title {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 1rem;
+            color: var(--secondary);
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .modal-body {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            line-height: 1.6;
+        }
+
+        .loader {
+            text-align: center;
+            font-family: 'Press Start 2P', cursive;
+            color: var(--primary);
+            padding: 40px;
+            animation: blink 1s infinite step-end;
+            grid-column: 1 / -1;
+        }
+
+        @keyframes blink {
+            50% {
+                opacity: 0;
+            }
+        }
+
+        .trace-step {
+            border: 2px solid var(--border-color);
+            background-color: var(--surface);
+            padding: 15px;
+            box-shadow: 4px 4px 0px rgba(0, 0, 0, 0.05);
+        }
+
+        .trace-step-header {
+            display: flex;
+            justify-content: space-between;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+            border-bottom: 1px dashed var(--grid-color);
+            padding-bottom: 8px;
+        }
+
+        .trace-command {
+            font-size: 1.1rem;
+            color: var(--secondary);
+            font-weight: bold;
+            margin-bottom: 10px;
+            word-break: break-all;
+        }
+
+        .output-block {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--text-main);
+            white-space: pre-wrap;
+            max-height: 150px;
+            overflow-y: auto;
+            margin-top: 5px;
+        }
+
+        .output-block.stderr {
+            color: var(--danger);
+            background-color: #fff5f5;
+            border-color: #fed7d7;
+        }
+
+        .neutralized-banner {
+            background-color: rgba(0, 143, 57, 0.1);
+            color: var(--success);
+            padding: 8px;
+            border: 2px dashed var(--success);
+            margin-bottom: 10px;
+            font-size: 0.9rem;
+        }
+
+        .text-primary {
+            color: var(--primary);
+        }
+
+        .text-danger {
+            color: var(--danger);
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h1>[ Live Threat Dashboard ]</h1>
+        <div class="subtitle">Environment State & Incident Monitor</div>
+    </header>
+
+    <div class="container">
+        <div class="dashboard-stats" id="stats-container">
+            <div class="stat-card">
+                <div class="stat-label">TOTAL THREATS</div>
+                <div class="stat-value" id="val-total">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">ACTIVE THREATS</div>
+                <div class="stat-value" id="val-active" style="color: var(--danger)">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">TOTAL SCORE</div>
+                <div class="stat-value" id="val-score" style="color: var(--success)">--</div>
+            </div>
+        </div>
+
+        <div class="threats-grid" id="threats-container">
+            <div class="loader">FETCHING_THREAT_STATE...</div>
+        </div>
+
+        <div id="trace-container-root">
+            <h2
+                style="color:var(--primary); font-size:1.4rem; border-bottom:2px dashed var(--border-color); padding-bottom:10px; margin-top:40px;">
+                EXECUTION_TRACE</h2>
+            <div id="trace-container" style="display:flex; flex-direction:column; gap:15px; margin-top:20px;">
+                <div class="loader">WAITING_FOR_TRACE...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Conditions Modal -->
+    <div id="conditions-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal()">&times;</span>
+            <div class="modal-title" id="modal-threat-id">THREAT_DETAILS</div>
+            <div class="modal-body" id="modal-conditions-content">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let globalThreats = [];
+
+        function showConditions(threatId) {
+            const threat = globalThreats.find(t => t.threat_id === threatId);
+            if (!threat) return;
+
+            document.getElementById('modal-threat-id').innerText = `[ ${threat.threat_id} ]`;
+
+            const conditions = threat.conditions && threat.conditions.length > 0
+                ? threat.conditions.map(c => `<div style="margin-bottom:10px; background:var(--bg-color); padding:10px; border-left:4px solid var(--primary);">> ${c}</div>`).join('')
+                : 'No specific conditions defined.';
+
+            document.getElementById('modal-conditions-content').innerHTML = `
+                <div style="margin-bottom:20px;">
+                    <strong style="color:var(--secondary)">LABEL:</strong> ${threat.label}
+                </div>
+                <strong style="color:var(--secondary)">ACTIVE_CONDITIONS:</strong><br><br>
+                ${conditions}
+            `;
+
+            document.getElementById('conditions-modal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('conditions-modal').style.display = 'none';
+        }
+
+        // Close on click outside
+        window.onclick = function (event) {
+            const modal = document.getElementById('conditions-modal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+
+        async function fetchState() {
+            try {
+                const res = await fetch('/trace');
+                if (!res.ok) throw new Error('API Error');
+                const data = await res.json();
+                renderDashboard(data);
+            } catch (err) {
+                console.error(err);
+                document.getElementById('threats-container').innerHTML =
+                    `<div style="color:var(--danger); font-family:'Press Start 2P'; text-align:center; padding: 40px;">ERROR_CONNECTION_LOST</div>`;
+            }
+        }
+
+        function renderDashboard(data) {
+            const container = document.getElementById('threats-container');
+            const traceContainer = document.getElementById('trace-container');
+
+            globalThreats = data.threats || [];
+
+            if (!data.threats || data.threats.length === 0) {
+                container.innerHTML = `<div style="text-align:center; padding: 40px; color:var(--text-dim);">NO_THREATS_CONFIGURED</div>`;
+                traceContainer.innerHTML = '<div style="color:var(--text-dim)">NO_COMMANDS_EXECUTED_YET</div>';
+                return;
+            }
+
+            // Update stats
+            document.getElementById('val-total').innerText = data.threats.length;
+            document.getElementById('val-active').innerText = data.active_threats;
+            document.getElementById('val-score').innerText = data.total_score.toFixed(3);
+
+            let htmlStr = '';
+
+            data.threats.forEach(t => {
+                const isNeutralised = t.neutralised;
+                const statusClass = isNeutralised ? 'status-neutralised' : 'status-active';
+                const statusText = isNeutralised ? 'NEUTRALISED' : 'ACTIVE';
+                const barClass = isNeutralised ? 'status-neutralised-bar' : 'status-active-bar';
+
+                let sevClass = '';
+                if (t.severity.toLowerCase() === 'high') sevClass = 'severity-high';
+                if (t.severity.toLowerCase() === 'medium') sevClass = 'severity-medium';
+                if (t.severity.toLowerCase() === 'low') sevClass = 'severity-low';
+
+                htmlStr += `
+                    <div class="threat-card ${statusClass}">
+                        <div class="threat-header">
+                            <h2 class="threat-id">${t.threat_id}</h2>
+                            <span class="threat-severity ${sevClass}">${t.severity}</span>
+                        </div>
+                        <div class="threat-label">
+                            ${t.label}
+                        </div>
+                        <div class="threat-status-bar ${barClass}">
+                            ${statusText}
+                        </div>
+                        <button class="show-conditions-btn" onclick="showConditions('${t.threat_id}')">View Conditions</button>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = htmlStr;
+
+            // Render execution trace
+            if (data.steps) {
+                let traceHtml = '';
+
+                if (data.steps.length === 0) {
+                    traceHtml = '<div style="color:var(--text-dim)">NO_COMMANDS_EXECUTED_YET</div>';
+                } else {
+                    // Render in reverse order so latest is on top
+                    const reversedSteps = [...data.steps].reverse();
+
+                    reversedSteps.forEach(s => {
+                        const statusStr = s.blocked_reason ? 'BLOCKED' : 'EXECUTED';
+                        const statusClass = s.blocked_reason ? 'text-danger' : 'text-primary';
+                        const ntHtml = s.neutralised_threats.length > 0
+                            ? `<div class="neutralized-banner"><strong>THREAT(S) NEUTRALISED: ${s.neutralised_threats.join(', ')}</strong></div>`
+                            : '';
+                        const stdoutHtml = s.stdout ? `<div class="output-block stdout">${s.stdout.replace(/</g, "&lt;")}</div>` : '';
+                        const stderrHtml = s.stderr ? `<div class="output-block stderr">${s.stderr.replace(/</g, "&lt;")}</div>` : '';
+                        const blockHtml = s.blocked_reason ? `<div class="output-block stderr">REASON: ${s.blocked_reason}</div>` : '';
+
+                        traceHtml += `
+                            <div class="trace-step">
+                                <div class="trace-step-header">
+                                    <span>[STEP_${s.step_id}]</span>
+                                    <span class="${statusClass}">STATUS: ${statusStr}</span>
+                                </div>
+                                <div class="trace-command">> ${s.command ? s.command.replace(/</g, "&lt;") : 'EMPTY'}</div>
+                                ${ntHtml}
+                                ${stdoutHtml}
+                                ${stderrHtml}
+                                ${blockHtml}
+                            </div>
+                        `;
+                    });
+                }
+                traceContainer.innerHTML = traceHtml;
+            }
+        }
+
+        fetchState();
+        setInterval(fetchState, 3000); // refresh frequently for live view
+    </script>
+</body>
+
+</html>

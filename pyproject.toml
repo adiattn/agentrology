@@ -14,6 +14,7 @@ version = "0.1.0"
 description = "Agentrology environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
+    "colorama>=0.4.6",
     "openenv-core[core]>=0.2.2",
     "pre-commit>=4.5.1",
 ]
@@ -43,7 +44,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]  # pycodestyle, pyflakes, isort, bugbear
-ignore = ["E501"]
+ignore = ["E501", "E402"]
 
 [tool.ruff.format]
 quote-style = "double"

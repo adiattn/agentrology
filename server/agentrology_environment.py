@@ -22,8 +22,11 @@ Public surface:
 """
 
 import logging
+import re
 import subprocess
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
@@ -33,11 +36,7 @@ from models import AgentrologyAction, AgentrologyObservation, ThreatStatus
 from server.security import CommandValidator
 from server.threat_manager import GraderResult, ThreatManager
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-
+SEPARATORS_REGEX = r"(?:\s*(?:;|\|\||&&|\|)\s*)+"
 DIAGNOSTIC_PREFIXES = (
     "ps",
     "pgrep",
@@ -108,13 +107,25 @@ class AgentrologyEnvironment(Environment):
 
     def __init__(self) -> None:
         """Initialise the environment with fresh collaborators."""
+        super().__init__()
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._validator = CommandValidator()
         self._threat_manager = ThreatManager()
         self._previous_result = GraderResult()
         self._threat_manager.setup_scripts()
         self.command_history: list[str] = []
+        self._trace_steps: list[dict[str, Any]] = []
         self._logger = logging.getLogger(self.__class__.__name__)
+        self._logger.setLevel(logging.DEBUG)
+        self._logger.info("Environment initialized.")
+
+    def generate_restricted_process_list(self) -> list[str]:
+        """Generate a list of processes that should be restricted.
+
+        Returns:
+            A list of process names to be restricted.
+        """
+        return []
 
     def reset(self) -> AgentrologyObservation:
         """Tear down any active threats and spawn a fresh incident.
@@ -130,6 +141,7 @@ class AgentrologyEnvironment(Environment):
         self._threat_manager.spawn()
         self._previous_result = GraderResult()
         self.command_history.clear()
+        self._trace_steps.clear()
 
         return AgentrologyObservation(
             stdout=RESET_BANNER,
@@ -170,20 +182,32 @@ class AgentrologyEnvironment(Environment):
         validation = self._validator.validate(command)
         if not validation.is_allowed:
             current = self._threat_manager.grade()
+            self._record_trace(command, "", "", current, validation.reason)
             return self._blocked_observation(command, current, validation.reason)
 
-        repetition_count = self.command_history.count(command)
+        # repetition count: how many times has this exact command been executed consequently in the past?
+        repetition_count = 0
+        for i in range(len(self.command_history) - 1, -1, -1):
+            if self.command_history[i] == command:
+                repetition_count += 1
+            else:
+                break
 
         self.command_history.append(command)
         if "ps" not in command and "pgrep" not in command and "pstree" not in command:
             if repetition_count >= _COMMAND_REPETITION_THRESHOLD:
                 current = self._threat_manager.grade()
                 reason = f"Command has been executed {repetition_count} times. "
+                self._record_trace(command, "", "", current, reason)
                 return self._blocked_observation(command, current, reason)
             elif repetition_count > 2:
                 penalty = repetition_count * _COMMAND_REPETITION_PENALTY
                 current = self._threat_manager.grade()
                 reward = -penalty
+                reason = f"Command has been executed {repetition_count} times."
+                self._record_trace(command, "", "", current, reason)
+
+                # Note: Not updating self._previous_result here intentionally for repetition penalties.
                 return AgentrologyObservation(
                     stdout="",
                     stderr="",
@@ -191,7 +215,7 @@ class AgentrologyEnvironment(Environment):
                     reward=reward,
                     done=current.all_clear,
                     threat_status=self._build_threat_status(current),
-                    security_violation=f"Command has been executed {repetition_count} times.",
+                    security_violation=reason,
                     metadata={
                         "step": self._state.step_count,
                         "command": command,
@@ -208,6 +232,8 @@ class AgentrologyEnvironment(Environment):
         )
         current = self._threat_manager.grade()
         reward = self._compute_reward(command, return_code, current)
+
+        self._record_trace(command, stdout, stderr, current, "")
         self._previous_result = current
 
         return AgentrologyObservation(
@@ -225,6 +251,34 @@ class AgentrologyEnvironment(Environment):
                 "scores": current.scores,
                 "total_score": current.total_score,
             },
+        )
+
+    def _record_trace(
+        self,
+        command: str,
+        stdout: str,
+        stderr: str,
+        current: GraderResult,
+        blocked_reason: str,
+    ):
+        neutralised_threats = []
+        for i, (old_score, new_score) in enumerate(
+            zip(self._previous_result.scores, current.scores, strict=False)
+        ):
+            if old_score < 1.0 and new_score >= 1.0:
+                neutralised_threats.append(
+                    self._threat_manager.threat_meta()[i]["threat_id"]
+                )
+
+        self._trace_steps.append(
+            {
+                "step_id": self._state.step_count,
+                "command": command,
+                "stdout": stdout,
+                "stderr": stderr,
+                "blocked_reason": blocked_reason,
+                "neutralised_threats": neutralised_threats,
+            }
         )
 
     @property
@@ -269,6 +323,64 @@ class AgentrologyEnvironment(Environment):
         except Exception as exc:
             return ("", str(exc)[:_STDERR_MAX_CHARS], 1)
 
+    def is_repeating_bad_command(self, command: str, threshold: int = 3) -> bool:
+        """
+        Detect repeated command patterns like:
+        - "whoami whoami whoami"
+        - "whoami && whoami && whoami"
+        - "ls | ls | ls"
+
+        Args:
+            command: Input command string
+            threshold: Minimum repetition count to flag
+
+        Returns:
+            bool
+        """
+        MIN_REP_CMD_LENGTH = 8
+        if len(command) < MIN_REP_CMD_LENGTH:
+            return False
+
+        command = command.strip()
+
+        # Case 1: simple repetition via whitespace (no separators)
+        tokens = command.split()
+        if len(tokens) > 1:
+            token_counts = Counter(tokens)
+            _, count = token_counts.most_common(1)[0]
+
+            # If one token dominates heavily -> repetition
+            if count >= threshold and count / len(tokens) > 0.6:
+                return True
+
+        # Case 2: repetition via shell separators
+        parts = re.split(SEPARATORS_REGEX, command)
+        parts = [re.sub(r"\s+", " ", p.strip().lower()) for p in parts if p.strip()]
+
+        if len(parts) >= threshold:
+            counts = Counter(parts)
+            _, count = counts.most_common(1)[0]
+
+            if count >= threshold:
+                return True
+
+        return False
+
+    def _ensure_safe_reward(self, reward: float) -> float:
+        """Clamp reward to a range of [0.0, 1.0] to prevent runaway values from unexpected score deltas.
+
+        Args:
+            reward: The raw computed reward for the current step.
+
+        Returns:
+            A float reward value clamped between 0.0 and 1.0.
+        """
+        if reward < 0.0:
+            reward = 0.0001
+        if reward >= 1.0:
+            reward = 0.9999
+        return reward
+
     def _compute_reward(
         self,
         command: str,
@@ -278,13 +390,13 @@ class AgentrologyEnvironment(Environment):
         """Compute the delta-based shaped reward for this step.
 
         Reward components:
-            Score delta:  Σ max(0, current_score[i] - previous_score[i])
-                          Positive-only so score regressions on self-healing
-                          threats do not penalise the agent twice.
+            Score delta:  Σ (current_score[i] - previous_score[i])
+                          True delta, meaning score regressions on self-healing
+                          threats will correctly penalise the agent and encourage urgency.
             Diagnostic:   +0.05 for a successful diagnostic command when the
                           score delta is zero (encourages exploration without
                           inflating total episode reward).
-            Error:        -0.05 for a failed non-kill command (discourages
+            Error:        -0.1 for any failed command (discourages
                           the agent from getting stuck in an error loop).
 
         Args:
@@ -296,7 +408,7 @@ class AgentrologyEnvironment(Environment):
             A rounded float reward value.
         """
         score_delta = sum(
-            max(0.0, now - before)
+            (now - before)
             for now, before in zip(
                 current.scores, self._previous_result.scores, strict=False
             )
@@ -310,10 +422,15 @@ class AgentrologyEnvironment(Environment):
             if is_diagnostic and return_code == 0:
                 reward += 0.05
 
-        if return_code != 0 and not command.lower().startswith("kill"):
-            reward -= 0.05
+        if return_code != 0:
+            reward -= 0.08
 
-        return round(reward, 4)
+        if self.is_repeating_bad_command(
+            command, threshold=_COMMAND_REPETITION_THRESHOLD
+        ):
+            reward -= 0.1
+
+        return round(self._ensure_safe_reward(reward), 4)
 
     def _blocked_observation(
         self,
@@ -368,3 +485,28 @@ class AgentrologyEnvironment(Environment):
                 self._threat_manager.threat_meta(), result.scores, strict=False
             )
         ]
+
+    def get_trace(self) -> dict[str, Any]:
+        result = self._previous_result
+        threats = [
+            {
+                "threat_id": meta["threat_id"],
+                "label": meta["label"],
+                "severity": meta["severity"],
+                "conditions": meta.get("conditions", []),
+                "score": score,
+                "neutralised": score >= 1.0,
+            }
+            for meta, score in zip(
+                self._threat_manager.threat_meta(), result.scores, strict=False
+            )
+        ]
+        return {
+            "type": "trace",
+            "commands": self.command_history,
+            "step_count": self._state.step_count,
+            "total_score": result.total_score,
+            "active_threats": result.active_count,
+            "threats": threats,
+            "steps": self._trace_steps,
+        }

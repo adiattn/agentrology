@@ -28,7 +28,6 @@ BLOCKED_EXECUTABLES = frozenset(
         "rlogin",
         "rsh",
         "ftp",
-        "nc",
         "ncat",
         "netcat",
         "nmap",
@@ -73,7 +72,7 @@ BLOCKED_EXECUTABLES = frozenset(
 BLOCKED_PATTERNS = [
     # (r"\bssh\b", "Remote shell access is forbidden."),
     (r"\bscp\b", "Secure copy is forbidden."),
-    (r"\bnc\b[\s<>|]", "Raw TCP connections via netcat are forbidden."),
+    (r"(?:^|[;&]\s*|\|\s*)nc(?:\s|$)", "Raw TCP connections via netcat are forbidden."),
     (r"\bncat\b", "Raw TCP connections via ncat are forbidden."),
     (r"\bcurl\b", "Outbound HTTP requests are forbidden."),
     (r"\bwget\b", "Outbound HTTP requests are forbidden."),
@@ -110,7 +109,10 @@ BLOCKED_PATTERNS = [
     ),
     (r"\x00", "Null bytes in commands are forbidden."),
     (r"\\x[0-9a-fA-F]{2}", "Hex-escaped characters in commands are forbidden."),
-    (r"\$\(.*\)", "Command substitution is restricted to safe use cases."),
+    (
+        r"\$\(.*\b(bash|sh|zsh|curl|wget|nc|ncat|python\d*\s+-c)\b.*\)",
+        "Dangerous command substitution is forbidden.",
+    ),
 ]
 
 ALLOWED_CRONTAB_SUBCOMMANDS = frozenset(["-r", "-l"])
@@ -120,6 +122,79 @@ PROTECTED_PIDS = {
     os.getpid(),  # current process
     os.getppid(),  # parent (uvicorn launcher)
 }
+
+# Allowlist for read-only diagnostic/forensic commands.
+# These are the commands a threat-neutralization agent legitimately needs.
+# A pipeline is safe if EVERY segment's first token is in this set.
+SAFE_DIAGNOSTIC_EXECUTABLES = frozenset(
+    [
+        "netstat",
+        "ss",
+        "systemctl",
+        "ps",
+        "lsof",
+        "who",
+        "w",
+        "last",
+        "lastlog",
+        "grep",
+        "egrep",
+        "fgrep",
+        "awk",
+        "sed",
+        "cut",
+        "sort",
+        "uniq",
+        "head",
+        "tail",
+        "cat",
+        "less",
+        "more",
+        "wc",
+        "find",
+        "ls",
+        "stat",
+        "file",
+        "du",
+        "df",
+        "id",
+        "whoami",
+        "uname",
+        "hostname",
+        "uptime",
+        "top",
+        "htop",
+        "pgrep",
+        "pstree",
+        "env",
+        "printenv",
+        "ip",
+        "ifconfig",
+        "arp",
+        "route",
+        "kill",
+        "pkill",  # for neutralization; self-kill guard handles abuse
+    ]
+)
+
+SAFE_SYSTEMCTL_SUBCOMMANDS = frozenset(
+    [
+        "list-units",
+        "list-unit-files",
+        "list-sockets",
+        "list-timers",
+        "list-jobs",
+        "list-machines",
+        "list-dependencies",
+        "status",
+        "show",
+        "cat",
+        "is-active",
+        "is-enabled",
+        "is-failed",
+        "help",
+    ]
+)
 
 
 @dataclass
@@ -142,8 +217,9 @@ class CommandValidator:
     Commands are evaluated in the following order:
         1. Length limit check.
         2. Explicit allowlist for safe crontab subcommands.
-        3. Regex pattern blocklist (catches obfuscated variants).
-        4. First-token executable blocklist.
+        3. Safe diagnostic pipeline allowlist (read-only forensic commands).
+        4. Regex pattern blocklist (catches obfuscated variants).
+        5. First-token executable blocklist.
 
     Example:
         >>> validator = CommandValidator()
@@ -222,6 +298,33 @@ class CommandValidator:
                 return True
         return False
 
+    @staticmethod
+    def _is_safe_diagnostic_pipeline(command: str) -> bool:
+        """Return True if every pipe segment starts with a known safe executable.
+
+        This allows commands like:
+            netstat -tulnp | grep -v 'grep' | grep -iE 'ssh|nc|netcat|python|bash|sh'
+
+        Args:
+            command: The stripped shell command string.
+        """
+        segments = re.split(r"\|", command)
+        for seg in segments:
+            seg = seg.strip()
+            if not seg:
+                continue
+            # extract first token of this segment
+            try:
+                tokens = shlex.split(seg)
+            except ValueError:
+                tokens = seg.split()
+            if not tokens:
+                continue
+            first = tokens[0].split("/")[-1].lower()
+            if first not in SAFE_DIAGNOSTIC_EXECUTABLES:
+                return False
+        return True
+
     def validate(self, command: str) -> ValidationResult:
         """Validate a shell command against the security policy.
 
@@ -244,6 +347,16 @@ class CommandValidator:
         stripped = command.strip()
 
         if self._is_safe_crontab(stripped):
+            return ValidationResult(is_allowed=True)
+
+        if self._is_safe_diagnostic_pipeline(stripped):
+            if (
+                "kill" in stripped or "pkill" in stripped
+            ) and CommandValidator.is_kill_self_command(stripped):
+                return ValidationResult(
+                    is_allowed=False,
+                    reason="Policy violation: attempted termination of server process.",
+                )
             return ValidationResult(is_allowed=True)
 
         first_token = self._extract_first_token(stripped)
@@ -270,11 +383,24 @@ class CommandValidator:
             )
 
         if "rm " in stripped:
-            # Matches 'rm' followed by optional flags (like -rf, -r -f), targeting / or /*
             if re.search(r"\brm\s+(?:-[a-zA-Z]+\s+)*/\*?(?:\s|$)", stripped):
                 return ValidationResult(
                     is_allowed=False,
                     reason="Dangerous use of 'rm' targeting the root directory is forbidden.",
+                )
+
+        if first_token == "systemctl":
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError:
+                tokens = stripped.split()
+            subcmd = tokens[1] if len(tokens) > 1 else ""
+            if subcmd in SAFE_SYSTEMCTL_SUBCOMMANDS:
+                return ValidationResult(is_allowed=True)
+            else:
+                return ValidationResult(
+                    is_allowed=False,
+                    reason=f"systemctl '{subcmd}' is not permitted. Only read-only subcommands are allowed.",
                 )
 
         for pattern, reason in self._compiled_patterns:
@@ -292,7 +418,7 @@ class CommandValidator:
         ) and CommandValidator.is_kill_self_command(stripped):
             return ValidationResult(
                 is_allowed=False,
-                reason="Policy violation: attempted termination of a protected environment server process (agent control/interface layer).",
+                reason="Policy violation: attempted termination of server process. Remember: this process is your own process, if you kill it, you will die. Don't do it.",
             )
 
         return ValidationResult(is_allowed=True)
