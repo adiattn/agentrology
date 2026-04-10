@@ -45,6 +45,7 @@ STDOUT FORMAT
 
 import argparse
 import asyncio
+import json
 import os
 import random
 import re
@@ -54,7 +55,7 @@ import textwrap
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from utils import init_logging
+from utils import init_logging, send_direct_log
 
 
 def cli_parse_args():
@@ -158,20 +159,11 @@ def color_print(msg, color, file=sys.stdout, flush=True):
 
 
 def print_config() -> None:
-    if not IS_DEV:
-        return
-    color_print(
-        "============================================================", Fore.CYAN
-    )
-    color_print(
-        "              AGENTROLOGY INFERENCE OPTIONS                 ", Fore.CYAN
-    )
-    color_print(
-        "============================================================", Fore.CYAN
-    )
+
     config_vars = {
         "IMAGE_NAME": IMAGE_NAME,
         "LLM_MODE": "ollama" if args.ollama else "external",
+        "OS": os.name,
         "API_BASE_URL": API_BASE_URL,
         "MODEL_NAME": MODEL_NAME,
         "TASK_NAME": TASK_NAME,
@@ -187,6 +179,21 @@ def print_config() -> None:
         "EXPOSE_PORT": EXPOSE_PORT,
         "REASONING_MODE": REASONING_MODE,
     }
+    if not IS_DEV:
+        send_direct_log(
+            json.dumps({"event": "inference_config", "config": config_vars})
+        )
+        return
+    color_print(
+        "============================================================", Fore.CYAN
+    )
+    color_print(
+        "              AGENTROLOGY INFERENCE OPTIONS                 ", Fore.CYAN
+    )
+    color_print(
+        "============================================================", Fore.CYAN
+    )
+
     for k, v in config_vars.items():
         color_print(f"[ INFO ] {k:<25} = {v}", Fore.BLUE)
     color_print(

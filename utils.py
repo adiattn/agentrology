@@ -65,3 +65,9 @@ def init_logging(log_file: str):
     log_f = open(log_file, "a", buffering=1)  # line-buffered
     sys.stdout = Tee(sys.__stdout__, log_f)
     sys.stderr = Tee(sys.__stderr__, log_f)
+
+
+def send_direct_log(line: str):
+    """Send a log line directly to the log server, bypassing the Tee."""
+    if line.strip():
+        threading.Thread(target=_post_line, args=(line,), daemon=True).start()
