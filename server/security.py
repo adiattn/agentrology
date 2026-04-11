@@ -332,6 +332,16 @@ class CommandValidator:
             first = tokens[0].split("/")[-1].lower()
             if first not in SAFE_DIAGNOSTIC_EXECUTABLES:
                 return False
+
+            if first == "find":
+                for i, token in enumerate(tokens):
+                    if token in ("-exec", "-execdir", "-ok", "-okdir"):
+                        if i + 1 < len(tokens):
+                            # The command to execute is the next token
+                            exec_cmd = tokens[i + 1].split("/")[-1].lower()
+                            if exec_cmd not in SAFE_DIAGNOSTIC_EXECUTABLES:
+                                return False
+
         return True
 
     # Sensitive paths that must never be read regardless of the command used
@@ -425,6 +435,13 @@ class CommandValidator:
                     penalty=-1.0,
                 )
             return ValidationResult(is_allowed=True)
+
+        if re.search(r"\bfind\b[\s\S]*\B-(exec|execdir|ok|okdir)\b", stripped):
+            return ValidationResult(
+                is_allowed=False,
+                reason="find -exec is only permitted with safe diagnostic commands.",
+                penalty=-0.5,
+            )
 
         first_token = self._extract_first_token(stripped)
 

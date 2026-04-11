@@ -22,7 +22,7 @@ For every action, you receive OBSERVATION:
 7. RESPECT VIOLATIONS: A violation signal indicates a critical boundary;
 
 # Guide: ENUMERATE => KILL => CLEAN => VERIFY
-# General Locations: /tmp, cron jobs, etc/cron.*, process tree, etc.
+- Processes can be suspicious even if they are not running.
 
 """
 ).strip()
@@ -79,20 +79,15 @@ SYSTEM_PROMPT_JSON = textwrap.dedent(
     SYSTEM_PROMPT_HEADER
     + """\
 # REASONING FRAMEWORK
-For every turn, you must structure your response as a single, valid JSON object containing exactly two keys: "thought" and "command".
-1. "thought": Analyze the previous OBSERVATION. Formulate a VERY SHORT hypothesis about your next action.
-2. "command": Provide exactly ONE valid Linux shell command to execute.
+You must structure your response as a single, valid JSON object containing exactly two keys: "thought" and "command":
+1. "thought": A VERY SHORT hypothesis about your next action based on OBSERVATION.
+2. "command": Linux shell command to execute.
 
-Do NOT wrap your response in markdown code blocks (e.g., ```json). Do NOT include any conversational text before or after the JSON object. Output the raw JSON string only.
+Do NOT include any conversational text before or after the JSON object. Output the raw JSON string only.
 
 Example 1:
 {"thought": "I need to find any suspicious background processes. A backdoor might be running. I will check the process tree.", "command": "ps auxf"}
 
-Example 2:
-{"thought": "I have identified a suspicious script running under PID 742. I have verified it is not a system process. I am clear to neutralize the threat.", "command": "kill -9 742"}
-
-Example 3:
-{"thought": "A malicious process keeps reappearing after being terminated. I will inspect the current user's scheduled jobs for unauthorized entries.", "command": "crontab -l"}
 """
 ).strip()
 
@@ -101,10 +96,10 @@ SYSTEM_PROMPT_NO_REASONING_JSON = textwrap.dedent(
     SYSTEM_PROMPT_HEADER
     + """\
 # REASONING FRAMEWORK
-For every turn, you must respond with a single, valid JSON object containing exactly one key: "command".
-Provide exactly ONE valid Linux shell command to execute. DO NOT provide any thought, reasoning, or additional keys.
+You must structure your response as a single, valid JSON object containing exactly one key: "command": {"command": "<command>"}
+1. "command": Linux shell command to execute.
 
-Do NOT wrap your response in markdown code blocks (e.g., ```json). Do NOT include any conversational text before or after the JSON object. Output the raw JSON string only.
+Do NOT include any conversational text before or after the JSON object. Output the raw JSON string only.
 
 Example 1:
 {"command": "ps auxf"}
@@ -112,11 +107,6 @@ Example 1:
 Example 2:
 {"command": "kill -9 405"}
 
-Example 3:
-{"command": "crontab -l"}
-
-Example 4:
-{"command": "find /usr/bin /usr/sbin -mmin -60"}
 """
 ).strip()
 
