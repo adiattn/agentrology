@@ -40,17 +40,17 @@ class GraderResult:
 
     @property
     def neutralised(self) -> List[bool]:
-        """True for each threat whose score has reached 1.0."""
-        return [s >= 1.0 for s in self.scores]
+        """True for each threat whose score has reached 0.99 (max is 0.9999)."""
+        return [s >= 0.99 for s in self.scores]
 
     @property
     def active_count(self) -> int:
         """Number of threats not yet fully neutralised."""
-        return sum(1 for s in self.scores if s < 1.0)
+        return sum(1 for s in self.scores if s < 0.99)
 
     @property
     def all_clear(self) -> bool:
-        """True when every threat score has reached 1.0."""
+        """True when every threat score has reached 0.99."""
         return self.active_count == 0
 
     @property
@@ -62,9 +62,9 @@ class GraderResult:
         """Return a human-readable per-threat breakdown."""
         lines = []
         for task, score in zip(ALL_TASKS, self.scores, strict=False):
-            status = "✓" if score >= 1.0 else "✗"
+            status = "✓" if score >= 0.99 else "✗"
             lines.append(
-                f"  {status} {task.threat_id} [{task.severity:<8}] {score:.2f}  {task.label}"
+                f"  {status} {task.threat_id} [{task.severity:<8}] {score:.4f}  {task.label}"
             )
         lines.append(
             f"\n  Total: {self.total_score:.4f}  |  Active: {self.active_count}/{THREAT_COUNT}"
@@ -123,9 +123,11 @@ class ThreatManager:
         """Score all threats against current OS state.
 
         Returns:
-            GraderResult with one float score per threat.
+            GraderResult with one float score per threat (strictly between 0 and 1).
         """
-        return GraderResult(scores=[task.grade() for task in self._tasks])
+        return GraderResult(
+            scores=[max(0.0001, min(0.9999, task.grade())) for task in self._tasks]
+        )
 
     def threat_meta(self, active_only: bool = False) -> list[dict]:
         """Return display metadata for all managed tasks."""

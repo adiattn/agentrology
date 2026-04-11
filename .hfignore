@@ -1,0 +1,4 @@
+.cache/
+logs/
+scripts/submit-project.sh
+openenv_agentrology.egg-info/
