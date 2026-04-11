@@ -135,6 +135,7 @@ class ThreatManager:
             {
                 "threat_id": t.threat_id,
                 "label": t.label,
+                "difficulty": t.difficulty,
                 "severity": t.severity,
                 "conditions": t.conditions,
             }

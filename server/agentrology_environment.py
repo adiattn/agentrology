@@ -177,45 +177,40 @@ class AgentrologyEnvironment(Environment):
                 break
 
         self.command_history.append(command)
-        if "ps" not in command and "pgrep" not in command and "pstree" not in command:
-            if repetition_count >= _COMMAND_REPETITION_THRESHOLD:
-                current = self._threat_manager.grade()
-                reason = f"Command has been executed {repetition_count} times. "
-                self._record_trace(command, "", "", current, reason)
-                rep_penalty = max(
-                    -1.0, -(repetition_count * _COMMAND_REPETITION_PENALTY)
-                )
-                block_result = ValidationResult(
-                    is_allowed=False, reason=reason, penalty=rep_penalty
-                )
-                return self._blocked_observation(block_result, current)
-            elif repetition_count > 2:
-                # Soft repetition warning: negative reward, capped at -1.0
-                rep_penalty = max(
-                    -1.0, -(repetition_count * _COMMAND_REPETITION_PENALTY)
-                )
-                current = self._threat_manager.grade()
-                reason = f"Command has been executed {repetition_count} times."
-                self._record_trace(command, "", "", current, reason)
+        if repetition_count >= _COMMAND_REPETITION_THRESHOLD:
+            current = self._threat_manager.grade()
+            reason = f"Command has been executed {repetition_count} times. "
+            self._record_trace(command, "", "", current, reason)
+            rep_penalty = max(-1.0, -(repetition_count * _COMMAND_REPETITION_PENALTY))
+            block_result = ValidationResult(
+                is_allowed=False, reason=reason, penalty=rep_penalty
+            )
+            return self._blocked_observation(block_result, current)
+        elif repetition_count > 2:
+            # Soft repetition warning: negative reward, capped at -1.0
+            rep_penalty = max(-1.0, -(repetition_count * _COMMAND_REPETITION_PENALTY))
+            current = self._threat_manager.grade()
+            reason = f"Command has been executed {repetition_count} times."
+            self._record_trace(command, "", "", current, reason)
 
-                # Note: Not updating self._previous_result here intentionally for repetition penalties.
-                return AgentrologyObservation(
-                    stdout="",
-                    stderr="",
-                    active_threats=current.active_count,
-                    reward=rep_penalty,
-                    done=current.all_clear,
-                    threat_status=self._build_threat_status(current),
-                    security_violation=reason,
-                    metadata={
-                        "step": self._state.step_count,
-                        "command": command,
-                        "repetition_count": repetition_count,
-                        "repetition_penalty": rep_penalty,
-                        "scores": current.scores,
-                        "total_score": current.total_score,
-                    },
-                )
+            # Note: Not updating self._previous_result here intentionally for repetition penalties.
+            return AgentrologyObservation(
+                stdout="",
+                stderr="",
+                active_threats=current.active_count,
+                reward=rep_penalty,
+                done=current.all_clear,
+                threat_status=self._build_threat_status(current),
+                security_violation=reason,
+                metadata={
+                    "step": self._state.step_count,
+                    "command": command,
+                    "repetition_count": repetition_count,
+                    "repetition_penalty": rep_penalty,
+                    "scores": current.scores,
+                    "total_score": current.total_score,
+                },
+            )
 
         if str(_SERVER_PORT) in command:
             current = self._threat_manager.grade()
@@ -235,8 +230,11 @@ class AgentrologyEnvironment(Environment):
             return_code=return_code,
             prev_scores=self._previous_result.scores,
             curr_scores=current.scores,
-            is_repeating_bad=self.is_repeating_bad_command(
-                command, threshold=_COMMAND_REPETITION_THRESHOLD
+            is_repeating_bad=(
+                self.is_repeating_bad_command(
+                    command, threshold=_COMMAND_REPETITION_THRESHOLD
+                )
+                or self.is_building_on_empty_output(command)
             ),
         )
 
@@ -370,6 +368,57 @@ class AgentrologyEnvironment(Environment):
             _, count = counts.most_common(1)[0]
 
             if count >= threshold:
+                return True
+
+            # Case 3: Same base binary repeated through pipes (e.g. 5+ greps)
+            base_bins = [p.split()[0] for p in parts if p]
+            if len(base_bins) >= threshold:
+                bin_counts = Counter(base_bins)
+                _, bin_count = bin_counts.most_common(1)[0]
+                if bin_count >= threshold:
+                    return True
+
+        return False
+
+    def is_building_on_empty_output(self, command: str) -> bool:
+        """
+        Detect if the agent is appending pipes/flags to a command that
+        already produced no output on the immediately preceding step.
+        """
+        if not self._trace_steps:
+            return False
+
+        last_step = self._trace_steps[-1]
+        last_cmd = last_step["command"].strip()
+        last_out = last_step["stdout"].strip()
+        last_err = last_step["stderr"].strip()
+        last_out_lines = [line.strip() for line in last_out.split("\n") if line.strip()]
+
+        is_empty = False
+        if not last_out_lines and not last_err:
+            is_empty = True
+        elif (
+            len(last_out_lines) == 1
+            and "PID" in last_out_lines[0]
+            and "COMMAND" in last_out_lines[0]
+            and not last_err
+        ):
+            is_empty = True
+
+        if not is_empty:
+            return False
+        if len(last_cmd) < 5:
+            return False
+
+        command = command.strip()
+
+        if command.startswith(last_cmd) and len(command) > len(last_cmd):
+            suffix = command[len(last_cmd) :]
+            if (
+                suffix.startswith(" ")
+                or suffix.startswith("|")
+                or suffix.startswith(";")
+            ):
                 return True
 
         return False

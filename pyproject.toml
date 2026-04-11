@@ -44,7 +44,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]  # pycodestyle, pyflakes, isort, bugbear
-ignore = ["E501", "E402"]
+ignore = ["E501", "E402", "E722"]
 
 [tool.ruff.format]
 quote-style = "double"

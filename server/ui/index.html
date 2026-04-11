@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Agentrology Benchmarks</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=VT323&family=Press+Start+2P&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-color: #f4f4f8;
@@ -347,6 +348,15 @@
             <div class="loader">LOADING_SYSTEM_DATA...</div>
         </div>
 
+        <div class="charts-container" id="charts-container" style="display:none; justify-content:center; gap:40px; margin-bottom:40px;">
+            <div style="width: 300px; height: 300px; background:var(--surface); border:var(--border-width) solid var(--border-color); padding:10px;">
+                <canvas id="successChart"></canvas>
+            </div>
+            <div style="width: 300px; height: 300px; background:var(--surface); border:var(--border-width) solid var(--border-color); padding:10px;">
+                <canvas id="modelChart"></canvas>
+            </div>
+        </div>
+
         <div class="benchmarks-container">
             <table class="benchmarks-table" id="benchmarks-table">
                 <thead>
@@ -378,18 +388,51 @@
     </div>
 
     <script>
-        let allBenchmarks = [];
+        let allBenchmarks = []; // will store the sessions
+        let successChartInstance = null;
+        let modelChartInstance = null;
 
         async function fetchBenchmarks() {
             try {
                 const res = await fetch('/api/benchmarks');
                 if(!res.ok) throw new Error('API Error');
                 const data = await res.json();
-                allBenchmarks = data.sort((a,b) => {
-                    const tA = new Date(a.summary.start_time).getTime() || 0;
-                    const tB = new Date(b.summary.start_time).getTime() || 0;
-                    return tB - tA; // desc
-                });
+
+                allBenchmarks = data.map(d => {
+                    const tasks = (d.run_details && Array.isArray(d.run_details)) ? d.run_details : [d];
+                    const timestampStr = d.timestamp || (tasks.length > 0 && tasks[0].summary ? tasks[0].summary.start_time : null);
+
+                    let model = d.model || (tasks.length > 0 ? tasks[0].model : 'Unknown');
+                    let benchmark = d.benchmark || (tasks.length > 0 ? tasks[0].benchmark : 'Unknown');
+
+                    let totalScore = 0;
+                    let successCount = 0;
+                    let threatsKilled = 0;
+                    let numTasks = tasks.length;
+
+                    tasks.forEach(t => {
+                        if (t.summary) {
+                            totalScore += t.summary.final_score || 0;
+                            if (t.summary.success) successCount++;
+                            threatsKilled += (t.summary.neutralized_threats || 0);
+                        }
+                    });
+
+                    let avgScore = numTasks > 0 ? totalScore / numTasks : 0;
+
+                    return {
+                        original: d,
+                        model,
+                        benchmark,
+                        timestamp: timestampStr ? new Date(timestampStr) : new Date(0),
+                        tasks: tasks,
+                        numTasks,
+                        successCount,
+                        avgScore,
+                        threatsKilled
+                    };
+                }).sort((a,b) => b.timestamp.getTime() - a.timestamp.getTime());
+
                 renderDashboard();
             } catch (err) {
                 console.error(err);
@@ -398,24 +441,46 @@
             }
         }
 
+        function toggleTasks(sessionIdx, e) {
+            const rows = document.querySelectorAll(`.task-row-${sessionIdx}`);
+            rows.forEach(r => {
+                r.style.display = r.style.display === 'none' ? 'table-row' : 'none';
+            });
+            const arrow = document.getElementById(`arrow-${sessionIdx}`);
+            if(arrow) {
+                arrow.innerHTML = arrow.innerHTML === '▼' ? '▲' : '▼';
+            }
+        }
+
         function renderDashboard() {
             const tbody = document.getElementById('benchmarks-body');
             const statsContainer = document.getElementById('stats-container');
+            const chartsContainer = document.getElementById('charts-container');
 
             if (allBenchmarks.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-dim)">NO_DATA_FOUND</td></tr>`;
                 statsContainer.innerHTML = '';
+                if(chartsContainer) chartsContainer.style.display = 'none';
                 return;
             }
 
-            const totalRuns = allBenchmarks.length;
-            const successRuns = allBenchmarks.filter(b => b.summary.success).length;
-            const successRate = ((successRuns / totalRuns) * 100).toFixed(0);
-            const threatsNeutralized = allBenchmarks.reduce((acc, b) => acc + b.summary.neutralized_threats, 0);
+            if(chartsContainer) chartsContainer.style.display = 'flex';
+
+            let totalRuns = 0;
+            let successRuns = 0;
+            let threatsNeutralized = 0;
+
+            allBenchmarks.forEach(session => {
+                totalRuns += session.numTasks;
+                successRuns += session.successCount;
+                threatsNeutralized += session.threatsKilled;
+            });
+
+            const successRate = totalRuns > 0 ? ((successRuns / totalRuns) * 100).toFixed(0) : 0;
 
             statsContainer.innerHTML = `
                 <div class="stat-card">
-                    <div class="stat-label">RUNS</div>
+                    <div class="stat-label">TASKS RUN</div>
                     <div class="stat-value">${totalRuns}</div>
                 </div>
                 <div class="stat-card">
@@ -428,47 +493,137 @@
                 </div>
             `;
 
+            const ctx1 = document.getElementById('successChart').getContext('2d');
+            if(successChartInstance) successChartInstance.destroy();
+            successChartInstance = new Chart(ctx1, {
+                type: 'pie',
+                data: {
+                    labels: ['Success', 'Failed'],
+                    datasets: [{
+                        data: [successRuns, totalRuns - successRuns],
+                        backgroundColor: ['#008f39', '#d90429'],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'bottom', labels: { color: '#2b2d42', font: { family: "'VT323', monospace", size: 16 } } },
+                        title: { display: true, text: 'TASKS_OUTCOME', color: '#c9184a', font: { family: "'Press Start 2P', cursive", size: 12 } }
+                    }
+                }
+            });
+
+            const models = {};
+            allBenchmarks.forEach(session => {
+                session.tasks.forEach(t => {
+                    let m = t.model || session.model || 'Unknown';
+                    models[m] = (models[m] || 0) + 1;
+                });
+            });
+
+            const ctx2 = document.getElementById('modelChart').getContext('2d');
+            if(modelChartInstance) modelChartInstance.destroy();
+            modelChartInstance = new Chart(ctx2, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(models),
+                    datasets: [{
+                        data: Object.values(models),
+                        backgroundColor: ['#0077b6', '#c9184a', '#ffb703', '#90e0ef', '#fb8500', '#caf0f8'],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'bottom', labels: { color: '#2b2d42', font: { family: "'VT323', monospace", size: 16 } } },
+                        title: { display: true, text: 'MODEL_DISTRIBUTION', color: '#0077b6', font: { family: "'Press Start 2P', cursive", size: 12 } }
+                    }
+                }
+            });
+
             tbody.innerHTML = '';
 
-            allBenchmarks.forEach((bench, index) => {
-                const s = bench.summary;
-                const scoreColor = s.success ? 'var(--success)' : 'var(--danger)';
-                const date = new Date(s.start_time).toLocaleString();
+            allBenchmarks.forEach((session, sessionIdx) => {
+                const date = session.timestamp.toLocaleString();
+                const scoreColor = session.avgScore > 0.5 ? 'var(--success)' : 'var(--warning)';
 
                 const tr = document.createElement('tr');
-                tr.onclick = () => openModal(index);
+                tr.onclick = (e) => toggleTasks(sessionIdx, e);
                 tr.innerHTML = `
                     <td>
-                        <div class="cell-model">> ${bench.model}</div>
-                        <div class="cell-task">[${bench.benchmark}] ${bench.task}</div>
+                        <div class="cell-model">> ${session.model}</div>
+                        <div class="cell-task">[${session.benchmark}] (${session.numTasks} tasks)</div>
                         <div style="font-size:0.9rem; color:var(--text-dim); margin-top:5px;">${date}</div>
                     </td>
                     <td>
-                        <div style="color: ${scoreColor}">${s.final_score.toFixed(2)}</div>
+                        <div style="color: ${scoreColor}">${session.avgScore.toFixed(2)} AVG SCORE</div>
                         <div class="score-bar-bg">
-                            <div class="score-bar-fill" style="width: ${s.final_score * 100}%; background-color: ${scoreColor}"></div>
+                            <div class="score-bar-fill" style="width: ${session.avgScore * 100}%; background-color: ${scoreColor}"></div>
                         </div>
                     </td>
                     <td>
-                        <div>${s.neutralized_threats} / ${s.total_threats}</div>
-                        <div style="font-size:0.9rem; color:var(--text-dim)">STEPS: ${s.steps_taken}/${bench.max_steps}</div>
+                        <div>${session.threatsKilled} NEUTRALIZED</div>
                     </td>
                     <td>
-                        ${s.time_taken ? s.time_taken.toFixed(1) + 's' : 'N/A'}
+                        <span style="color:var(--text-dim)">N/A</span>
                     </td>
                     <td>
-                        <span class="status-badge ${s.success ? 'status-success' : 'status-failed'}">
-                            ${s.success ? 'SUCCESS' : 'FAILED'}
+                        <span class="status-badge ${session.successCount === session.numTasks && session.numTasks > 0 ? 'status-success' : (session.successCount > 0 ? 'status-success' : 'status-failed')}">
+                            ${session.successCount}/${session.numTasks} SUCCESS
                         </span>
+                        <div id="arrow-${sessionIdx}" style="display:inline-block; margin-left:10px; font-size:1.2rem; cursor:pointer;">▼</div>
                     </td>
                 `;
                 tbody.appendChild(tr);
+
+                session.tasks.forEach((task, taskIdx) => {
+                    const s = task.summary || {};
+                    const tScoreColor = s.success ? 'var(--success)' : 'var(--danger)';
+                    const tDate = s.start_time ? new Date(s.start_time).toLocaleString() : 'N/A';
+
+                    const taskTr = document.createElement('tr');
+                    taskTr.className = `task-row-${sessionIdx}`;
+                    taskTr.style.display = "none";
+                    taskTr.style.backgroundColor = "rgba(0, 119, 182, 0.05)";
+                    taskTr.onclick = (e) => {
+                        e.stopPropagation();
+                        openModal(sessionIdx, taskIdx);
+                    };
+
+                    taskTr.innerHTML = `
+                        <td style="padding-left: 30px; border-left: 4px solid var(--primary);">
+                            <div class="cell-task" style="color:var(--text-main); font-weight:bold;">${task.task || 'Unknown Task'}</div>
+                            <div style="font-size:0.8rem; color:var(--text-dim); margin-top:5px;">${tDate}</div>
+                        </td>
+                        <td>
+                            <div style="color: ${tScoreColor}">${(s.final_score || 0).toFixed(2)}</div>
+                            <div class="score-bar-bg" style="height:5px;">
+                                <div class="score-bar-fill" style="width: ${(s.final_score || 0) * 100}%; background-color: ${tScoreColor}"></div>
+                            </div>
+                        </td>
+                        <td>
+                            <div>${s.neutralized_threats || 0} / ${s.total_threats || 1}</div>
+                            <div style="font-size:0.8rem; color:var(--text-dim)">STEPS: ${s.steps_taken || 0}/${task.max_steps || 'N/A'}</div>
+                        </td>
+                        <td>
+                            ${s.time_taken ? s.time_taken.toFixed(1) + 's' : 'N/A'}
+                        </td>
+                        <td>
+                            <span class="status-badge ${s.success ? 'status-success' : 'status-failed'}">
+                                ${s.success ? 'SUCCESS' : 'FAILED'}
+                            </span>
+                        </td>
+                    `;
+                    tbody.appendChild(taskTr);
+                });
             });
         }
 
-        function openModal(index) {
-            const bench = allBenchmarks[index];
-            const s = bench.summary;
+        function openModal(sessionIdx, taskIdx) {
+            const bench = allBenchmarks[sessionIdx].tasks[taskIdx];
+            const s = bench.summary || {};
             const modalBody = document.getElementById('modal-body');
 
             // Checkpoints HTML

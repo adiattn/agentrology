@@ -17,6 +17,13 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from prompts import (
+    SYSTEM_PROMPT,
+    SYSTEM_PROMPT_JSON,
+    SYSTEM_PROMPT_NO_REASONING,
+    SYSTEM_PROMPT_NO_REASONING_JSON,
+    extract_command_json,
+)
 from utils import init_logging, send_direct_log
 
 
@@ -88,7 +95,7 @@ API_KEY = (
     or "[NONE]"
 )
 API_BASE_URL = args.api_url or os.getenv("API_BASE_URL") or default_api_base_url
-MODEL_NAME = args.model or os.getenv("MODEL_NAME") or "zai-org/GLM-5.1"
+MODEL_NAME = args.model or os.getenv("MODEL_NAME") or "openai/gpt-oss-20b"
 BENCHMARK = args.benchmark or os.getenv("BENCHMARK", "agentrology-benchmark")
 MAX_STEPS = args.max_steps or int(os.getenv("MAX_STEPS", "45"))
 REASONING_MODE = (
@@ -96,8 +103,7 @@ REASONING_MODE = (
 )
 TASK_IDS = args.task_ids or os.getenv("TASK_IDS", "T01,T02,T03,T04,T05,T06").split(",")
 IS_SUBMISSION_ENV = os.getenv("SHELL", "") != "/usr/bin/zsh"
-if IS_DEV:
-    IS_SUBMISSION_ENV = False
+
 IMAGE_NAME = (
     args.image
     or os.getenv("LOCAL_IMAGE_NAME")
@@ -124,6 +130,13 @@ BENCHMARK_DIR = os.getenv("BENCHMARK_DIR", "benchmarks")
 EXPOSE_PORT = int(os.getenv("EXPOSE_PORT", "0"))
 if args.port:
     EXPOSE_PORT = args.port
+
+if IS_DEV:
+    IS_SUBMISSION_ENV = False
+
+if IS_SUBMISSION_ENV:
+    REASONING_MODE = True  # reasoning improves perf
+    REASONING_EFFORT = None  # requires checking model and provider impl
 
 from colorama import Fore, Style, init
 
@@ -199,81 +212,6 @@ def log_info(msg: str) -> None:
     color_print(f"[INFO] {msg}", Fore.BLUE)
 
 
-SYSTEM_PROMPT_HEADER = textwrap.dedent(
-    """\
-[AGENTROLOGY] You are an Autonomous L2 Security Operations Center (SOC) Analyst operating within a Linux environment.
-Your objective: Neutralize active_threats via non-interactive bash.
-
-# ENVIRONMENT
-For every action, you receive OBSERVATION:
-- stdout, stderr: command output/errors
-- active_threats (T): number of remaining threats
-- reward (R): progress signal (positive = good, zero = ineffective/destructive)
-- security_violation: message if command was blocked due to violation
-
-# RULES OF ENGAGEMENT
-1. NO INTERACTIVE COMMANDS: Never run commands that require user input or open interactive visual interfaces.
-2. DESTRUCTION: Never use reboot, shutdown, rm -rf, or network disabling.
-3. IMPORTANT:  The /app/env directory contains your interface uvicorn server, Do **NOT** attempt to kill or delete files from that location.
-4. NO MASS TERMINATION: Commands that terminate multiple processes at once (via pipes, xargs, or pattern matching) are strictly prohibited.
-5. NEVER target directly or indirectly: uvicorn processes, PORT 8000, /app/env
-6. If a command does not reduce T, DO NOT repeat it, change strategy.
-7. RESPECT VIOLATIONS: A violation signal indicates a critical boundary;
-
-
-# Guide: ENUMERATE => KILL => CLEAN => VERIFY
-
-"""
-).strip()
-
-
-SYSTEM_PROMPT = textwrap.dedent(
-    SYSTEM_PROMPT_HEADER
-    + """\
-# REASONING FRAMEWORK
-For every turn, you must structure your response in two parts:
-1. [THOUGHT]: Analyze the previous OBSERVATION. Formulate a hypothesis about your next action.
-2. [COMMAND]: Provide exactly ONE valid Linux shell command to execute. Following are examples, BUT you are not limited these commands, these are just for illustration.
-
-Example 1:
-[THOUGHT] I need to find any suspicious background processes. A backdoor might be running. I will check the process tree.
-[COMMAND] ps auxf
-
-Example 2:
-[THOUGHT] I have identified a suspicious script running under PID 742. I have verified it is not a system process. I am clear to neutralize the threat.
-[COMMAND] kill -9 742
-
-Example 3:
-[THOUGHT] A malicious process keeps reappearing after being terminated. I will inspect the current user's scheduled jobs for unauthorized entries.
-[COMMAND] crontab -l
-
-Your output must always end with the [COMMAND] block. Do not wrap the command in markdown code blocks, just output the raw command string after the [COMMAND] tag.
-"""
-).strip()
-
-SYSTEM_PROMPT_NO_REASONING = textwrap.dedent(
-    SYSTEM_PROMPT_HEADER
-    + """\
-# REASONING FRAMEWORK
-For every turn, you must respond with exactly ONE valid Linux shell command to execute. Do NOT provide any thought or reasoning.
-
-Example 1:
-[COMMAND] ps auxf
-
-Example 2:
-[COMMAND] kill -9 405
-
-Example 3:
-[COMMAND] crontab -l
-
-Example 4:
-[COMMAND] find /usr/bin /usr/sbin -mmin -60
-
-Your output must be EXACTLY the [COMMAND] block and nothing else. Do not wrap the command in markdown code blocks, just output the raw command string after the [COMMAND] tag.
-"""
-).strip()
-
-
 def log_start(task: str, env: str, model: str, provider_url: str) -> None:
     msg = f"[START] task={task} env={env} model={model} provider_url={provider_url}"
     color_print(msg, Fore.GREEN)
@@ -304,7 +242,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 USER_PROMPT_TEMPLATE = """\
 [STEP]: {step}
-## OBSERVATION
+## OBSERVATION (OF LAST COMMAND)
 {security_violation_block}
 [STDOUT]: {stdout}
 [STDERR]: {stderr}
@@ -319,8 +257,12 @@ USER_PROMPT_TEMPLATE = """\
 {footer}
 """
 
-USER_PROMPT_FOOTER_TEMPLATE_NO_REASONING = """Formulate your [COMMAND]."""
-USER_PROMPT_FOOTER_TEMPLATE_REASONING = """Formulate your [THOUGHT] and [COMMAND]."""
+# USER_PROMPT_FOOTER_TEMPLATE_NO_REASONING = """Formulate your [COMMAND]."""
+# USER_PROMPT_FOOTER_TEMPLATE_REASONING = """Formulate your [THOUGHT] and [COMMAND]."""
+USER_PROMPT_FOOTER_TEMPLATE_NO_REASONING = (
+    """Formulate your response as a JSON object with the following keys: "command"."""
+)
+USER_PROMPT_FOOTER_TEMPLATE_REASONING = """Formulate your response as a JSON object with the following keys: "thought" and "command"."""
 
 SECURITY_VIOLATION_BLOCK_TEMPLATE = """\
 [SYSTEM SECURITY VIOLATION!!]: {security_violation_message}"""
@@ -398,12 +340,7 @@ def build_user_prompt(
 
 
 def parse_command(response_text: str) -> Optional[str]:
-    """Extracts the command from the LLM's ReAct output format."""
-    match = re.search(r"\[COMMAND\]\s*(.+)", response_text, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-
-    return None
+    return extract_command_json(response_text)
 
 
 import httpx
@@ -484,23 +421,26 @@ async def get_model_action(
             )
             await asyncio.sleep(random.uniform(0.5, 2.0))
         else:
+            kwargs = {}
+            if REASONING_EFFORT:
+                kwargs["reasoning_effort"] = REASONING_EFFORT
             completion = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
                     {
                         "role": "system",
                         "content": (
-                            SYSTEM_PROMPT
+                            SYSTEM_PROMPT_JSON
                             if REASONING_MODE
-                            else SYSTEM_PROMPT_NO_REASONING
+                            else SYSTEM_PROMPT_NO_REASONING_JSON
                         ),
                     },
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=TEMPERATURE,
-                reasoning_effort=REASONING_EFFORT,
                 max_tokens=MAX_TOKENS,
                 stream=False,
+                **kwargs,
             )
             debug_print(
                 f"Model response received: {completion.choices[0].message.content}",
@@ -556,7 +496,7 @@ class DockerProviderWithRandomPort(LocalDockerProvider):
         return self._url
 
 
-async def fetch_tasks(task_ids: Optional[List[str]], base_url: str) -> List[str]:
+async def fetch_tasks(task_ids: Optional[List[str]], base_url: str) -> List[dict]:
     from urllib import request
 
     try:
@@ -566,7 +506,7 @@ async def fetch_tasks(task_ids: Optional[List[str]], base_url: str) -> List[str]
                     f"Failed to fetch tasks, status code: {response.status}"
                 )
             data = response.read()
-            tasks = json.loads(data)
+            tasks: List[dict] = json.loads(data)
             if task_ids:
                 tasks = [t for t in tasks if t["threat_id"] in task_ids]
             return sorted(tasks, key=lambda x: x["threat_id"])
@@ -611,7 +551,9 @@ async def initialize_environment() -> Tuple[AgentrologyEnv, str]:
     return env, provider._url
 
 
-async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> float:
+async def run_task(
+    env: AgentrologyEnv, client: AsyncOpenAI, task_id: str
+) -> Tuple[float, dict]:
     if not task_id:
         log_error("Task ID is required to run the inference script.")
         sys.exit(1)
@@ -950,16 +892,25 @@ async def main():
     print_config(task_ids=task_ids)
     client = AsyncOpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env, env_url = await initialize_environment()
-    tasks_info = await fetch_tasks(task_ids, base_url=env_url)
+    if not IS_SUBMISSION_ENV:
+        tasks_info = await fetch_tasks(task_ids, base_url=env_url)
+    else:
+        tasks_info = [
+            {
+                "threat_id": tid,
+            }
+            for tid in task_ids
+        ]
     scores = []
 
     try:
         for task_info in tasks_info:
             task_id = task_info["threat_id"]
-            debug_print(
-                f"[INFO] Running task: {task_id} {task_info['severity']} - {task_info['label']}",
-                False,
-            )
+            if not IS_SUBMISSION_ENV:
+                debug_print(
+                    f"[INFO] Running task: {task_id} [{task_info['difficulty']}] [{task_info['severity']}] - {task_info['label']}",
+                    False,
+                )
             final_task_score, benchmark_info = await run_task(
                 env, client, task_id=task_id
             )
@@ -1023,7 +974,7 @@ async def main():
         except Exception as e:
             log_error(f"env.close() error (container cleanup): {e}")
 
-    time.sleep(1)
+    time.sleep(2)
     print("[INFO] Inference run completed.")
 
 
