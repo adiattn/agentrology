@@ -32,12 +32,14 @@ class ThreatTask(ABC):
         threat_id:  Short identifier, e.g. "T01".
         label:      Human-readable threat name.
         severity:   One of LOW / MEDIUM / HIGH / CRITICAL.
+        difficulty: One of Easy / Medium / Hard
         conditions: List of condition descriptions used for display.
     """
 
     threat_id: ClassVar[str]
     label: ClassVar[str]
     severity: ClassVar[str]
+    difficulty: ClassVar[str]
     conditions: ClassVar[list[str]]
 
     def _pgrep(self, pattern: str) -> bool:
@@ -105,5 +107,6 @@ class ThreatTask(ABC):
             "threat_id": self.threat_id,
             "label": self.label,
             "severity": self.severity,
+            "difficulty": self.difficulty,
             "conditions": self.conditions,
         }

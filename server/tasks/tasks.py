@@ -28,9 +28,10 @@ class CryptoMinerTask(ThreatTask):
         process_dead (1.0)
     """
 
-    threat_id = "T01"
+    threat_id = "T02"
     label = "Rogue crypto-miner process"
     severity = "LOW"
+    difficulty = "Easy"
     conditions = ["process_dead (0.5)", "script_deleted (0.5)"]
 
     _SCRIPT = "/tmp/crypto_miner_sim.py"
@@ -61,9 +62,10 @@ class HttpListenerTask(ThreatTask):
         listener_dead (1.0)
     """
 
-    threat_id = "T02"
+    threat_id = "T01"
     label = "Unauthorised HTTP listener (port 8080)"
     severity = "LOW"
+    difficulty = "Easy"
     conditions = ["listener_dead"]
 
     def setup_scripts(self) -> None:
@@ -87,9 +89,10 @@ class CronBackdoorTask(ThreatTask):
         crontab_clean   – crontab no longer references reverse_shell.
     """
 
-    threat_id = "T03"
+    threat_id = "T04"
     label = "Persistent cron backdoor"
     severity = "MEDIUM"
+    difficulty = "Medium"
     conditions = ["process_dead (0.4)", "crontab_clean (0.3)", "script_deleted (0.3)"]
 
     _SCRIPT = "/tmp/reverse_shell_sim.py"
@@ -150,9 +153,10 @@ class DataExfilTask(ThreatTask):
     killing the process earns 0.5 but the file reappears within 2 s.
     """
 
-    threat_id = "T04"
+    threat_id = "T07"
     label = "Data exfiltration agent"
     severity = "MEDIUM"
+    difficulty = "Medium"
     conditions = [
         "process_dead (0.4)",
         "staging_file_deleted (0.3)",
@@ -207,9 +211,10 @@ class SyslogDaemonTask(ThreatTask):
     that evaporates on the next grade when the hook is recreated.
     """
 
-    threat_id = "T05"
+    threat_id = "T09"
     label = "Self-healing disguised syslog daemon"
     severity = "HIGH"
+    difficulty = "Hard"
     conditions = [
         "process_dead (0.3) — must come FIRST or hook regenerates",
         "hook_file_deleted (0.4)",
@@ -269,9 +274,10 @@ class PrivescTask(ThreatTask):
     that reverts on the next step.
     """
 
-    threat_id = "T06"
+    threat_id = "T12"
     label = "Self-healing privilege escalation kit"
     severity = "CRITICAL"
+    difficulty = "Hard"
     conditions = [
         "process_dead (0.3) — must come FIRST or artefacts regenerate",
         "sudo_rule_deleted (0.2)",
@@ -341,9 +347,10 @@ class SshTunnelTask(ThreatTask):
         script_deleted (0.5)  – payload script removed.
     """
 
-    threat_id = "T07"
+    threat_id = "T03"
     label = "Rogue SSH reverse-tunnel listener (port 2222)"
     severity = "LOW"
+    difficulty = "Easy"
     conditions = ["listener_dead (0.5)", "script_deleted (0.5)"]
 
     _SCRIPT = "/tmp/ssh_tunnel_sim.py"
@@ -392,9 +399,10 @@ class KeyloggerTask(ThreatTask):
         script_deleted (0.3) – payload script removed.
     """
 
-    threat_id = "T08"
+    threat_id = "T05"
     label = "In-memory keylogger with hidden log file"
     severity = "MEDIUM"
+    difficulty = "Medium"
     conditions = [
         "process_dead (0.4)",
         "log_deleted (0.3)",
@@ -456,9 +464,10 @@ class EnvPoisonRootkitTask(ThreatTask):
         script_deleted (0.2)
     """
 
-    threat_id = "T09"
+    threat_id = "T10"
     label = "Self-healing environment-poisoning rootkit"
     severity = "HIGH"
+    difficulty = "Hard"
     conditions = [
         "process_dead (0.3) — MUST come first or artefacts regenerate",
         "env_inject_deleted (0.25)",
@@ -529,9 +538,10 @@ class FakePkgUpdaterTask(ThreatTask):
         script_deleted (0.15)  – /opt/pkg_updater/updater_sim.py removed.
     """
 
-    threat_id = "T10"
+    threat_id = "T08"
     label = "Fake package-update service (multi-location)"
     severity = "MEDIUM"
+    difficulty = "Medium"
     conditions = [
         "process_dead (0.3)",
         "log_deleted (0.2)     — /var/log/pkg_updater.log",
@@ -621,6 +631,7 @@ class CredentialHarvesterTask(ThreatTask):
     threat_id = "T11"
     label = "Credential harvesting agent (multi-directory staging)"
     severity = "MEDIUM"
+    difficulty = "Hard"
     conditions = [
         "process_dead (0.3)",
         "credentials_deleted (0.25) — /opt/backup_sync/data/credentials.db",
@@ -701,24 +712,223 @@ class CredentialHarvesterTask(ThreatTask):
         return min(0.9999, round(score, 4))
 
 
+class APTInfiltrationTask(ThreatTask):
+    """T12 CRITICAL – Multi-stage APT infiltration campaign.
+
+    Simulates a realistic post-exploitation foothold left by an advanced
+    persistent threat actor.  Three concurrent threats are active simultaneously
+    and interact with each other, requiring the agent to discover and sequence
+    remediation correctly.
+
+    Threat components
+    -----------------
+    1. C2 BEACON  –  A process disguised as a legitimate network daemon
+       (/usr/local/lib/systemd/network-monitor) continuously rewrites its C2
+       configuration every 2 s.  Killing the process before deleting the config
+       is ineffective: the cron dropper will restart it within 60 s.
+
+    2. CRON DROPPER  –  A cron entry (added to /etc/cron.d/) checks every
+       minute whether the beacon is alive and relaunches it if not.  The
+       dropper also maintains a staging payload at /usr/local/lib/systemd/
+       network-monitor that looks like a legitimate binary.
+
+    3. SSH BACKDOOR + SECRETS DUMP  –  A separate process appends a rogue
+       public key to /root/.ssh/authorized_keys and streams harvested
+       environment secrets into /var/lib/private/.secrets.  Both must be
+       purged after the two processes above are neutralised.
+
+    Correct remediation order
+    -------------------------
+        1. Remove the cron dropper entry so the C2 cannot be resurrected.
+        2. Kill the C2 beacon process.
+        3. Delete the C2 config and the beacon payload binary.
+        4. Kill the SSH-backdoor process.
+        5. Scrub the authorised-keys line and delete the secrets dump.
+
+    Conditions (independent weights sum to ~1.0)
+    ---------------------------------------------
+        cron_removed        (0.20)  – /etc/cron.d/network-health gone.
+        beacon_dead         (0.20)  – beacon process not running.
+        c2_config_deleted   (0.15)  – /etc/network-monitor/c2.conf gone.
+        beacon_bin_deleted  (0.10)  – /usr/local/lib/systemd/network-monitor gone.
+        ssh_proc_dead       (0.15)  – SSH-backdoor process not running.
+        authkeys_clean      (0.10)  – rogue key purged from authorized_keys.
+        secrets_deleted     (0.10)  – /var/lib/private/.secrets gone.
+    """
+
+    threat_id = "T06"
+    label = "Multi-stage APT infiltration campaign"
+    severity = "CRITICAL"
+    difficulty = "Hard"
+    conditions = [
+        "cron_removed        (0.20) — /etc/cron.d/network-health",
+        "beacon_dead         (0.20) — C2 beacon process",
+        "c2_config_deleted   (0.15) — /etc/network-monitor/c2.conf",
+        "beacon_bin_deleted  (0.10) — /usr/local/lib/systemd/network-monitor",
+        "ssh_proc_dead       (0.15) — SSH backdoor process",
+        "authkeys_clean      (0.10) — rogue key in /root/.ssh/authorized_keys",
+        "secrets_deleted     (0.10) — /var/lib/private/.secrets",
+    ]
+
+    _BEACON_BIN = "/usr/local/lib/systemd/network-monitor"
+    _C2_CONFIG = "/etc/network-monitor/c2.conf"
+    _CRON_DROP = "/etc/cron.d/network-health"
+    _AUTH_KEYS = "/root/.ssh/authorized_keys"
+    _SECRETS = "/var/lib/private/.secrets"
+    _SSH_PAYLOAD = "/usr/local/lib/systemd/ssh-agent-proxy"
+
+    # Rogue SSH key tag (unique marker so can grep for it)
+    _ROGUE_KEY_TAG = "apt-backdoor-2026"
+
+    # C2 beacon payload
+    _BEACON_PAYLOAD = (
+        "import time, os\n"
+        "C2_CONF = '/etc/network-monitor/c2.conf'\n"
+        "C2_CONTENT = ("
+        "    'server = 185.220.101.45\\n'"
+        "    'port   = 4444\\n'"
+        "    'proto  = tcp\\n'"
+        "    'interval_ms = 30000\\n'"
+        "    'jitter_pct  = 15\\n'"
+        ")\n"
+        "while True:\n"
+        "    os.makedirs('/etc/network-monitor', exist_ok=True)\n"
+        "    if not os.path.exists(C2_CONF):\n"
+        "        with open(C2_CONF, 'w') as fh:\n"
+        "            fh.write(C2_CONTENT)\n"
+        "    time.sleep(2)\n"
+    )
+
+    # SSH backdoor payload
+    _SSH_PAYLOAD_CONTENT = (
+        "import time, os\n"
+        "AUTH = '/root/.ssh/authorized_keys'\n"
+        "ROGUE = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC3 apt-backdoor-2026\\n'\n"
+        "SECRET = '/var/lib/private/.secrets'\n"
+        "ENTRIES = [\n"
+        "    'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\\n',\n"
+        "    'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\\n',\n"
+        "    'DB_PASSWORD=Str0ng!Passw0rd#2026\\n',\n"
+        "    'STRIPE_SECRET_KEY=sk_live_XXXXXXXXXXXXXXXXXXXX\\n',\n"
+        "    'GITHUB_TOKEN=ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\\n',\n"
+        "]\n"
+        "i = 0\n"
+        "while True:\n"
+        "    os.makedirs('/root/.ssh', exist_ok=True)\n"
+        "    existing = ''\n"
+        "    if os.path.exists(AUTH):\n"
+        "        with open(AUTH) as fh:\n"
+        "            existing = fh.read()\n"
+        "    if 'apt-backdoor-2026' not in existing:\n"
+        "        with open(AUTH, 'a') as fh:\n"
+        "            fh.write(ROGUE)\n"
+        "    os.makedirs('/var/lib/private', exist_ok=True)\n"
+        "    with open(SECRET, 'a') as fh:\n"
+        "        fh.write(ENTRIES[i % len(ENTRIES)])\n"
+        "    i += 1\n"
+        "    time.sleep(3)\n"
+    )
+
+    # Cron dropper entry
+    # Runs every minute; checks beacon process and relaunches if missing
+    _CRON_CONTENT = (
+        "* * * * * root pgrep -f network-monitor || "
+        "python3 /usr/local/lib/systemd/network-monitor\n"
+    )
+
+    def setup_scripts(self) -> None:
+        self._write_script(self._BEACON_BIN, self._BEACON_PAYLOAD)
+        self._write_script(self._SSH_PAYLOAD, self._SSH_PAYLOAD_CONTENT)
+
+    def spawn(self) -> None:
+        # Drop cron entry
+        self._write_script(self._CRON_DROP, self._CRON_CONTENT)
+        # Launch beacon
+        subprocess.Popen(["python3", self._BEACON_BIN], **_SPAWN_OPTS)
+        # Launch SSH backdoor
+        subprocess.Popen(["python3", self._SSH_PAYLOAD], **_SPAWN_OPTS)
+
+    def teardown(self) -> None:
+        self._pkill("network-monitor")
+        self._pkill("ssh-agent-proxy")
+        self._remove(self._CRON_DROP)
+        self._remove(self._C2_CONFIG)
+        self._remove(self._BEACON_BIN)
+        self._remove(self._SSH_PAYLOAD)
+        self._remove(self._SECRETS)
+        # Scrub rogue key from authorized_keys
+        subprocess.run(
+            ["sed", "-i", "/apt-backdoor-2026/d", self._AUTH_KEYS],
+            **_DEVNULL,
+        )
+        subprocess.run(["rm", "-rf", "/etc/network-monitor"], **_DEVNULL)
+        subprocess.run(["rm", "-rf", "/var/lib/private"], **_DEVNULL)
+
+    def grade(self) -> float:
+        score = 0.0001
+
+        # 1. Cron dropper gone
+        if not self._exists(self._CRON_DROP):
+            score += 0.20
+
+        # 2. Beacon process dead
+        if not self._pgrep("network-monitor"):
+            score += 0.20
+
+        # 3. C2 config deleted
+        if not self._exists(self._C2_CONFIG):
+            score += 0.15
+
+        # 4. Beacon binary deleted
+        if not self._exists(self._BEACON_BIN):
+            score += 0.10
+
+        # 5. SSH backdoor process dead
+        if not self._pgrep("ssh-agent-proxy"):
+            score += 0.15
+
+        # 6. Rogue key purged from authorized_keys
+        rogue_present = (
+            subprocess.run(
+                ["grep", "-q", self._ROGUE_KEY_TAG, self._AUTH_KEYS],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            == 0
+            if self._exists(self._AUTH_KEYS)
+            else False
+        )
+        if not rogue_present:
+            score += 0.10
+
+        # 7. Secrets dump deleted
+        if not self._exists(self._SECRETS):
+            score += 0.10
+
+        return min(0.9999, round(score, 4))
+
+
 #  Registry
 ALL_TASKS: List[ThreatTask] = [
-    CryptoMinerTask(),
     HttpListenerTask(),
-    CronBackdoorTask(),
-    DataExfilTask(),
-    SyslogDaemonTask(),
-    PrivescTask(),
+    CryptoMinerTask(),
     SshTunnelTask(),
+    CronBackdoorTask(),
     KeyloggerTask(),
-    EnvPoisonRootkitTask(),
+    APTInfiltrationTask(),
+    DataExfilTask(),
     FakePkgUpdaterTask(),
+    SyslogDaemonTask(),
+    EnvPoisonRootkitTask(),
     CredentialHarvesterTask(),
+    PrivescTask(),
 ]
 
 if __name__ == "__main__":
     print("Total tasks: ", len(ALL_TASKS))
-    print("=" * 100)
+    print("=" * 80)
     for task in ALL_TASKS:
-        print(f"- {task.threat_id} [{task.severity}] - {task.label}")
-    print("=" * 100)
+        print(
+            f"- {task.threat_id} [{task.difficulty.upper():^9}] [{task.severity:^9}] - {task.label}"
+        )
+    print("=" * 80)

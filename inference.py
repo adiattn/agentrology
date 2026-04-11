@@ -37,6 +37,12 @@ def cli_parse_args():
     parser.add_argument("--max-tokens", help="Max tokens for the LLM", type=int)
     parser.add_argument("--task-ids", nargs="+", help="Task IDs to run")
     parser.add_argument(
+        "--reasoning-effort",
+        "--re",
+        type=str,
+        help="Reasoning effort for the LLM (none/low/medium/high) (default is low)",
+    )
+    parser.add_argument(
         "--reasoning",
         help="Enable reasoning mode",
         action="store_true",
@@ -82,14 +88,16 @@ API_KEY = (
     or "[NONE]"
 )
 API_BASE_URL = args.api_url or os.getenv("API_BASE_URL") or default_api_base_url
-MODEL_NAME = args.model or os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
+MODEL_NAME = args.model or os.getenv("MODEL_NAME") or "zai-org/GLM-5.1"
 BENCHMARK = args.benchmark or os.getenv("BENCHMARK", "agentrology-benchmark")
 MAX_STEPS = args.max_steps or int(os.getenv("MAX_STEPS", "45"))
 REASONING_MODE = (
     True if args.reasoning else (os.getenv("REASONING_MODE", "false").lower() == "true")
 )
-TASK_IDS = args.task_ids or os.getenv("TASK_IDS", "T01,T02,T03,T05,T07,T08").split(",")
+TASK_IDS = args.task_ids or os.getenv("TASK_IDS", "T01,T02,T03,T04,T05,T06").split(",")
 IS_SUBMISSION_ENV = os.getenv("SHELL", "") != "/usr/bin/zsh"
+if IS_DEV:
+    IS_SUBMISSION_ENV = False
 IMAGE_NAME = (
     args.image
     or os.getenv("LOCAL_IMAGE_NAME")
@@ -104,6 +112,9 @@ LOG_FILE = os.getenv(
     f"logs/{BENCHMARK}_{MODEL_NAME.replace('/', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
 )
 TEMPERATURE = args.temperature or float(os.getenv("TEMPERATURE", "0.08"))
+REASONING_EFFORT = "low"
+if args.reasoning_effort and args.reasoning_effort in ["none", "low", "medium", "high"]:
+    REASONING_EFFORT = args.reasoning_effort
 MAX_TOKENS = args.max_tokens or int(os.getenv("MAX_TOKENS", "500"))
 INTERACTIVE_MODE = (
     args.interactive or os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
@@ -487,6 +498,7 @@ async def get_model_action(
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=TEMPERATURE,
+                reasoning_effort=REASONING_EFFORT,
                 max_tokens=MAX_TOKENS,
                 stream=False,
             )
@@ -858,21 +870,25 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> fl
                 stop_reason = "Episode completed (done=True)"
                 break
 
-        # Score vs. Reward distinction
-        # REWARD: Can be positive or negative. Negative
-        # SCORE:  Must be strictly between 0 and 1 (not 0.0, not 1.0)
-        MAX_TOTAL_REWARD = (total_threats * 1.0) + (MAX_STEPS * 0.05)
-        total_positive_reward = sum(r for r in rewards if r > 0)
-        score = (
-            total_positive_reward / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.001
-        )
-        score = clamp_score(score)  # becomes striing
-        final_score = score
-
         end_time = datetime.now()
         success = (
             len(neutralization_checkpoints) == total_threats
         ) and total_threats > 0
+
+        # Score vs. Reward distinction
+        # SCORE: success-based metric in (0, 1).
+        neutralized = total_threats - last_threats
+        if total_threats > 0 and success:
+            # Efficiency bonus: solving faster = higher score
+            efficiency = 1.0 - (steps_taken / MAX_STEPS)
+            score = 0.70 + 0.30 * efficiency
+        elif total_threats > 0:
+            score = 0.70 * (neutralized / total_threats)
+        else:
+            score = 0.001
+        score = clamp_score(score)
+        final_score = score
+
         benchmark_info = {
             "benchmark": BENCHMARK,
             "task": TASK_NAME,
@@ -881,6 +897,7 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> fl
             "max_tokens": MAX_TOKENS,
             "max_steps": MAX_STEPS,
             "reasoning_on": REASONING_MODE,
+            "reasoning_effort": REASONING_EFFORT,
             "summary": {
                 "start_time": start_time.isoformat() if start_time else None,
                 "end_time": end_time.isoformat() if end_time else None,
@@ -918,29 +935,14 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> fl
             )
             time.sleep(1)
 
-        else:
-            identifier = "".join(
-                random.choices(string.ascii_letters + string.digits, k=4)
-            )
-            benchmark_file_name = (
-                f"{BENCHMARK}_{TASK_NAME}_{MODEL_NAME}_{identifier}.json"
-            )
-            benchmark_file_name = re.sub(r'[<>:"/\\|?*]', "_", benchmark_file_name)
-            benchmark_path = os.path.join(
-                BENCHMARK_DIR,
-                benchmark_file_name,
-            )
-            os.makedirs(BENCHMARK_DIR, exist_ok=True)
-            with open(benchmark_path, "w") as f:
-                json.dump(benchmark_info, f, indent=4)
-                debug_print(f"Benchmark info saved to {benchmark_path}")
+            pass
 
     finally:
         log_end(success=success, steps=steps_taken, score=final_score, rewards=rewards)
 
     print()
     print()
-    return final_score
+    return final_score, benchmark_info
 
 
 async def main():
@@ -958,13 +960,62 @@ async def main():
                 f"[INFO] Running task: {task_id} {task_info['severity']} - {task_info['label']}",
                 False,
             )
-            final_task_score = await run_task(env, client, task_id=task_id)
-            scores.append({"task_id": task_id, "score": final_task_score})
+            final_task_score, benchmark_info = await run_task(
+                env, client, task_id=task_id
+            )
+            scores.append(
+                {
+                    "task_id": task_id,
+                    "score": final_task_score,
+                    "benchmark_info": benchmark_info,
+                }
+            )
             await reset_bridge()
     finally:
         debug_print(
-            json.dumps({"event": "final_scores", "scores": scores}, indent=2), False
+            json.dumps(
+                {
+                    "event": "final_scores",
+                    "scores": [
+                        {"task_id": s["task_id"], "score": s["score"]} for s in scores
+                    ],
+                },
+                indent=2,
+            ),
+            False,
         )
+
+        if not IS_SUBMISSION_ENV and scores:
+            try:
+                identifier = "".join(
+                    random.choices(string.ascii_letters + string.digits, k=4)
+                )
+                benchmark_file_name = f"{BENCHMARK}_{MODEL_NAME}_{identifier}.json"
+                benchmark_file_name = re.sub(r'[<>:"/\\|?*]', "_", benchmark_file_name)
+                os.makedirs(BENCHMARK_DIR, exist_ok=True)
+                benchmark_path = os.path.join(BENCHMARK_DIR, benchmark_file_name)
+
+                with open(benchmark_path, "w") as f:
+                    json.dump(
+                        {
+                            "benchmark": BENCHMARK,
+                            "model": MODEL_NAME,
+                            "timestamp": datetime.now().isoformat(),
+                            "total_tasks_run": len(scores),
+                            "run_details": [s["benchmark_info"] for s in scores],
+                            "average_score": (
+                                sum(s["score"] for s in scores) / len(scores)
+                                if scores
+                                else 0.0
+                            ),
+                        },
+                        f,
+                        indent=4,
+                    )
+                debug_print(f"Overall run benchmark saved to {benchmark_path}")
+            except Exception as e:
+                log_error(f"Failed to save overall benchmark: {e}")
+
         try:
             debug_print("Closing environment connection...")
             await env.close()

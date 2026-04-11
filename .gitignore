@@ -218,3 +218,4 @@ __marimo__/
 logs/
 benchmarks/
 scripts/submit-project.sh
+scripts/migrate_benchmarks.py
