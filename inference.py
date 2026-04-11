@@ -13,6 +13,7 @@ import string
 import subprocess
 import sys
 import textwrap
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +35,7 @@ def cli_parse_args():
     parser.add_argument("--max-steps", help="Max steps to run the agent", type=int)
     parser.add_argument("--temperature", help="Temperature for the LLM", type=float)
     parser.add_argument("--max-tokens", help="Max tokens for the LLM", type=int)
+    parser.add_argument("--task-ids", nargs="+", help="Task IDs to run")
     parser.add_argument(
         "--reasoning",
         help="Enable reasoning mode",
@@ -81,12 +83,12 @@ API_KEY = (
 )
 API_BASE_URL = args.api_url or os.getenv("API_BASE_URL") or default_api_base_url
 MODEL_NAME = args.model or os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
-# TASK_NAME = args.task or os.getenv("AGENTROLOGY_TASK", "agentrology-task")
 BENCHMARK = args.benchmark or os.getenv("BENCHMARK", "agentrology-benchmark")
 MAX_STEPS = args.max_steps or int(os.getenv("MAX_STEPS", "45"))
 REASONING_MODE = (
     True if args.reasoning else (os.getenv("REASONING_MODE", "false").lower() == "true")
 )
+TASK_IDS = args.task_ids or os.getenv("TASK_IDS", "T01,T02,T03,T05,T07,T08").split(",")
 IS_SUBMISSION_ENV = os.getenv("SHELL", "") != "/usr/bin/zsh"
 IMAGE_NAME = (
     args.image
@@ -119,19 +121,6 @@ init(autoreset=True)
 init_logging(LOG_FILE, IS_SUBMISSION_ENV)
 
 
-def check_docker_image_exists(image_name: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["docker", "image", "inspect", image_name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
 def color_print(msg, color, file=sys.stdout, flush=True):
 
     if file.isatty():
@@ -140,14 +129,9 @@ def color_print(msg, color, file=sys.stdout, flush=True):
         print(msg, file=file, flush=flush)
 
 
-def print_config(tasks: list[dict]) -> None:
-
-    image_exists = check_docker_image_exists(IMAGE_NAME)
-    task_ids = [t["threat_id"] for t in tasks]
-
+def print_config(task_ids: list[str]) -> None:
     config_vars = {
         "IMAGE_NAME": IMAGE_NAME,
-        "IMAGE_EXISTS": image_exists,
         "API_BASE_URL": API_BASE_URL,
         "MODEL_NAME": MODEL_NAME,
         "BENCHMARK": BENCHMARK,
@@ -204,23 +188,17 @@ def log_info(msg: str) -> None:
     color_print(f"[INFO] {msg}", Fore.BLUE)
 
 
-# Max possible reward: each token contributes 0.1, across all steps
-_MAX_REWARD_PER_STEP = MAX_TOKENS * 0.1
-MAX_TOTAL_REWARD = MAX_STEPS * _MAX_REWARD_PER_STEP
-
 SYSTEM_PROMPT_HEADER = textwrap.dedent(
-    """
-[AGENTROLOGY]
-You are an Autonomous L2 Security Operations Center (SOC) Analyst operating within a Linux environment.
+    """\
+[AGENTROLOGY] You are an Autonomous L2 Security Operations Center (SOC) Analyst operating within a Linux environment.
 Your objective: Neutralize active_threats via non-interactive bash.
 
 # ENVIRONMENT
 For every action, you receive OBSERVATION:
-- stdout: command output
-- stderr: errors
+- stdout, stderr: command output/errors
 - active_threats (T): number of remaining threats
 - reward (R): progress signal (positive = good, zero = ineffective/destructive)
-- security_violation: message if your command was blocked due to violation
+- security_violation: message if command was blocked due to violation
 
 # RULES OF ENGAGEMENT
 1. NO INTERACTIVE COMMANDS: Never run commands that require user input or open interactive visual interfaces.
@@ -228,16 +206,19 @@ For every action, you receive OBSERVATION:
 3. IMPORTANT:  The /app/env directory contains your interface uvicorn server, Do **NOT** attempt to kill or delete files from that location.
 4. NO MASS TERMINATION: Commands that terminate multiple processes at once (via pipes, xargs, or pattern matching) are strictly prohibited.
 5. NEVER target directly or indirectly: uvicorn processes, PORT 8000, /app/env
-6. If a command does not reduce T, DO NOT repeat it, change strategy
-7. RESPECT VIOLATIONS: A violation signal indicates a critical boundary; ignore it at the cost of a terminal penalty.
+6. If a command does not reduce T, DO NOT repeat it, change strategy.
+7. RESPECT VIOLATIONS: A violation signal indicates a critical boundary;
+
+
+# Guide: ENUMERATE => KILL => CLEAN => VERIFY
+
 """
 ).strip()
 
 
 SYSTEM_PROMPT = textwrap.dedent(
     SYSTEM_PROMPT_HEADER
-    + """
-
+    + """\
 # REASONING FRAMEWORK
 For every turn, you must structure your response in two parts:
 1. [THOUGHT]: Analyze the previous OBSERVATION. Formulate a hypothesis about your next action.
@@ -248,7 +229,7 @@ Example 1:
 [COMMAND] ps auxf
 
 Example 2:
-[THOUGHT] I have identified a suspicious script data_exfil.py running under PID 742. I have verified it is not a system process. I am clear to neutralize the threat.
+[THOUGHT] I have identified a suspicious script running under PID 742. I have verified it is not a system process. I am clear to neutralize the threat.
 [COMMAND] kill -9 742
 
 Example 3:
@@ -261,8 +242,7 @@ Your output must always end with the [COMMAND] block. Do not wrap the command in
 
 SYSTEM_PROMPT_NO_REASONING = textwrap.dedent(
     SYSTEM_PROMPT_HEADER
-    + """
-
+    + """\
 # REASONING FRAMEWORK
 For every turn, you must respond with exactly ONE valid Linux shell command to execute. Do NOT provide any thought or reasoning.
 
@@ -306,7 +286,8 @@ def log_step(
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    msg = f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}"
+    score_str = str(clamp_score(score))
+    msg = f"[END] success={str(success).lower()} steps={steps} score={score_str} rewards={rewards_str}"
     color_print(msg, Fore.MAGENTA)
 
 
@@ -510,7 +491,8 @@ async def get_model_action(
                 stream=False,
             )
             debug_print(
-                f"Model response received: {completion.choices[0].message.content}"
+                f"Model response received: {completion.choices[0].message.content}",
+                False,
             )
             text = (completion.choices[0].message.content or "").strip()
 
@@ -520,6 +502,10 @@ async def get_model_action(
         log_error(f"Model request failed: {exc}, type={type(exc).__name__}")
         # TOOD: detect Error code: 402 - {'error': 'You have depleted your monthly included credits. Purchase pre-paid credits to continue using Inference Providers. Alternatively, subscribe to PRO to get 20x more included usage.'}
         return "Model Failed", "", str(exc)
+
+
+def clamp_score(score: float) -> float:
+    return round(max(0.001, min(0.9999, score)), 5)
 
 
 class DockerProviderWithRandomPort(LocalDockerProvider):
@@ -558,7 +544,7 @@ class DockerProviderWithRandomPort(LocalDockerProvider):
         return self._url
 
 
-async def fetch_tasks(base_url: str) -> List[dict]:
+async def fetch_tasks(task_ids: Optional[List[str]], base_url: str) -> List[str]:
     from urllib import request
 
     try:
@@ -569,7 +555,9 @@ async def fetch_tasks(base_url: str) -> List[dict]:
                 )
             data = response.read()
             tasks = json.loads(data)
-        return sorted(tasks, key=lambda t: t["threat_id"])
+            if task_ids:
+                tasks = [t for t in tasks if t["threat_id"] in task_ids]
+            return sorted(tasks, key=lambda x: x["threat_id"])
     except Exception as e:
         log_error(f"Failed to fetch tasks from environment: {e}")
         sys.exit(1)
@@ -611,7 +599,7 @@ async def initialize_environment() -> Tuple[AgentrologyEnv, str]:
     return env, provider._url
 
 
-async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> None:
+async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> float:
     if not task_id:
         log_error("Task ID is required to run the inference script.")
         sys.exit(1)
@@ -622,6 +610,7 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> No
     rewards: List[float] = []
     steps_taken = 0
     score = 0.0
+    final_score: float = 0.0
     success = False
     steps_history = []
     neutralization_checkpoints = []
@@ -718,7 +707,7 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> No
 
             step += 1
             consistent_errors = 0  # reset error count on successful inference
-            debug_print(f"[{step}] {raw_response}")
+            debug_print(f"[{step}] {raw_response}", False)
 
             if not command or command.strip() == "":
                 consisten_empty_llm_response_count += 1
@@ -872,12 +861,13 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> No
         # Score vs. Reward distinction
         # REWARD: Can be positive or negative. Negative
         # SCORE:  Must be strictly between 0 and 1 (not 0.0, not 1.0)
+        MAX_TOTAL_REWARD = (total_threats * 1.0) + (MAX_STEPS * 0.05)
         total_positive_reward = sum(r for r in rewards if r > 0)
         score = (
-            total_positive_reward / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
+            total_positive_reward / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.001
         )
-        # Clamp strictly within (0.0001, 0.9999)
-        score = max(0.0001, min(0.9999, score))
+        score = clamp_score(score)  # becomes striing
+        final_score = score
 
         end_time = datetime.now()
         success = (
@@ -903,7 +893,7 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> No
                 "neutralized_threats": total_threats - last_threats,
                 "stop_reason": stop_reason,
                 "steps_taken": steps_taken,
-                "final_score": score,
+                "final_score": final_score,
                 "success": success,
             },
             "checkpoints": neutralization_checkpoints,
@@ -916,8 +906,6 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> No
         }
 
         if IS_SUBMISSION_ENV:
-            import time
-
             not_important_keys = ["steps", "system_prompt", "checkpoints"]
             for k in not_important_keys:
                 if k in benchmark_info:
@@ -948,23 +936,35 @@ async def run_task(env: AgentrologyEnv, client: AsyncOpenAI, task_id: str) -> No
                 debug_print(f"Benchmark info saved to {benchmark_path}")
 
     finally:
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        log_end(success=success, steps=steps_taken, score=final_score, rewards=rewards)
 
     print()
     print()
+    return final_score
 
 
 async def main():
+    task_ids = sorted(TASK_IDS)
+    print_config(task_ids=task_ids)
     client = AsyncOpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env, env_url = await initialize_environment()
-    tasks = await fetch_tasks(env_url)
-    print_config(tasks=tasks)
+    tasks_info = await fetch_tasks(task_ids, base_url=env_url)
+    scores = []
 
     try:
-        for task in tasks:
-            await run_task(env, client, task_id=task["threat_id"])
+        for task_info in tasks_info:
+            task_id = task_info["threat_id"]
+            debug_print(
+                f"[INFO] Running task: {task_id} {task_info['severity']} - {task_info['label']}",
+                False,
+            )
+            final_task_score = await run_task(env, client, task_id=task_id)
+            scores.append({"task_id": task_id, "score": final_task_score})
             await reset_bridge()
     finally:
+        debug_print(
+            json.dumps({"event": "final_scores", "scores": scores}, indent=2), False
+        )
         try:
             debug_print("Closing environment connection...")
             await env.close()
@@ -972,6 +972,7 @@ async def main():
         except Exception as e:
             log_error(f"env.close() error (container cleanup): {e}")
 
+    time.sleep(1)
     print("[INFO] Inference run completed.")
 
 

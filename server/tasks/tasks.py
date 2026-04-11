@@ -12,6 +12,7 @@ a meaningful gradient.
 from __future__ import annotations
 
 import subprocess
+from typing import List
 
 from server.tasks.task_base import ThreatTask
 
@@ -328,12 +329,396 @@ class PrivescTask(ThreatTask):
         return min(0.9999, round(score, 4))
 
 
+class SshTunnelTask(ThreatTask):
+    """T07 LOW – Rogue SSH reverse-tunnel listener on port 2222.
+
+    Simulates an attacker holding a persistent reverse shell tunnel open
+    by binding a raw socket on port 2222. Easy to neutralise: just kill
+    the process.
+
+    Conditions:
+        listener_dead (0.5)   – process no longer running.
+        script_deleted (0.5)  – payload script removed.
+    """
+
+    threat_id = "T07"
+    label = "Rogue SSH reverse-tunnel listener (port 2222)"
+    severity = "LOW"
+    conditions = ["listener_dead (0.5)", "script_deleted (0.5)"]
+
+    _SCRIPT = "/tmp/ssh_tunnel_sim.py"
+    _PAYLOAD = (
+        "import socket, time\n"
+        "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+        "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+        "try:\n"
+        "    srv.bind(('0.0.0.0', 2222))\n"
+        "    srv.listen(1)\n"
+        "except OSError:\n"
+        "    pass\n"
+        "while True:\n"
+        "    time.sleep(1)\n"
+    )
+
+    def setup_scripts(self) -> None:
+        self._write_script(self._SCRIPT, self._PAYLOAD)
+
+    def spawn(self) -> None:
+        subprocess.Popen(["python3", self._SCRIPT], **_SPAWN_OPTS)
+
+    def teardown(self) -> None:
+        self._pkill("ssh_tunnel_sim.py")
+        self._remove(self._SCRIPT)
+
+    def grade(self) -> float:
+        score = 0.0001
+        if not self._pgrep("ssh_tunnel_sim.py"):
+            score += 0.5
+        if not self._exists(self._SCRIPT):
+            score += 0.5
+        return min(0.9999, round(score, 4))
+
+
+class KeyloggerTask(ThreatTask):
+    """T08 MEDIUM – In-memory keylogger draining to a hidden log file.
+
+    Simulates a keylogger that continuously appends fake keystroke records
+    to /tmp/.hidden/keylog.txt.  Agent must stop the process, remove the
+    log file, AND delete the script to score full marks.
+
+    Conditions (independent):
+        process_dead (0.4)  – keylogger_sim.py is not running.
+        log_deleted (0.3)   – /tmp/.hidden/keylog.txt does not exist.
+        script_deleted (0.3) – payload script removed.
+    """
+
+    threat_id = "T08"
+    label = "In-memory keylogger with hidden log file"
+    severity = "MEDIUM"
+    conditions = [
+        "process_dead (0.4)",
+        "log_deleted (0.3)",
+        "script_deleted (0.3)",
+    ]
+
+    _SCRIPT = "/tmp/keylogger_sim.py"
+    _LOG = "/tmp/.hidden/keylog.txt"
+    _PAYLOAD = (
+        "import time, os\n"
+        "LOG = '/tmp/.hidden/keylog.txt'\n"
+        "os.makedirs('/tmp/.hidden', exist_ok=True)\n"
+        "KEYS = ['passwd', 'sudo su', 'ssh root@10.0.0.1', 'secret_token=abc123']\n"
+        "i = 0\n"
+        "while True:\n"
+        "    with open(LOG, 'a') as fh:\n"
+        "        fh.write(f'[keystroke] {KEYS[i % len(KEYS)]}\\n')\n"
+        "    i += 1\n"
+        "    time.sleep(1)\n"
+    )
+
+    def setup_scripts(self) -> None:
+        self._write_script(self._SCRIPT, self._PAYLOAD)
+
+    def spawn(self) -> None:
+        subprocess.Popen(["python3", self._SCRIPT], **_SPAWN_OPTS)
+
+    def teardown(self) -> None:
+        self._pkill("keylogger_sim.py")
+        self._remove(self._LOG)
+        self._remove(self._SCRIPT)
+
+    def grade(self) -> float:
+        score = 0.0001
+        if not self._pgrep("keylogger_sim.py"):
+            score += 0.4
+        if not self._exists(self._LOG):
+            score += 0.3
+        if not self._exists(self._SCRIPT):
+            score += 0.3
+        return min(0.9999, round(score, 4))
+
+
+class EnvPoisonRootkitTask(ThreatTask):
+    """T09 HIGH – Self-healing environment-poisoning rootkit.
+
+    Simulates a rootkit that continuously regenerates two artefacts:
+      • /tmp/.rootkit/env_inject.sh  – shell snippet exporting a hijacked PATH
+      • /tmp/.rootkit/ld_preload.so  – fake shared library stub
+
+    The process polls every 2 s and recreates missing files.  The agent
+    must kill the process FIRST (or the files will return), then delete
+    both artefacts and the script itself.
+
+    Conditions (order-sensitive):
+        process_dead (0.3) — MUST come first or artefacts regenerate
+        env_inject_deleted (0.25)
+        ld_preload_deleted (0.25)
+        script_deleted (0.2)
+    """
+
+    threat_id = "T09"
+    label = "Self-healing environment-poisoning rootkit"
+    severity = "HIGH"
+    conditions = [
+        "process_dead (0.3) — MUST come first or artefacts regenerate",
+        "env_inject_deleted (0.25)",
+        "ld_preload_deleted (0.25)",
+        "script_deleted (0.2)",
+    ]
+
+    _SCRIPT = "/tmp/env_poison_rootkit_sim.py"
+    _ENV_INJECT = "/tmp/.rootkit/env_inject.sh"
+    _LD_PRELOAD = "/tmp/.rootkit/ld_preload.so"
+    _PAYLOAD = (
+        "import time, os\n"
+        "DIR = '/tmp/.rootkit'\n"
+        "ENV = '/tmp/.rootkit/env_inject.sh'\n"
+        "LD = '/tmp/.rootkit/ld_preload.so'\n"
+        "ENV_CONTENT = 'export PATH=/tmp/.rootkit/bin:$PATH\\n'\n"
+        "LD_CONTENT = '# fake ld_preload stub\\n'\n"
+        "while True:\n"
+        "    os.makedirs(DIR, exist_ok=True)\n"
+        "    if not os.path.exists(ENV):\n"
+        "        with open(ENV, 'w') as fh:\n"
+        "            fh.write(ENV_CONTENT)\n"
+        "    if not os.path.exists(LD):\n"
+        "        with open(LD, 'w') as fh:\n"
+        "            fh.write(LD_CONTENT)\n"
+        "    time.sleep(2)\n"
+    )
+
+    def setup_scripts(self) -> None:
+        self._write_script(self._SCRIPT, self._PAYLOAD)
+
+    def spawn(self) -> None:
+        subprocess.Popen(["python3", self._SCRIPT], **_SPAWN_OPTS)
+
+    def teardown(self) -> None:
+        self._pkill("env_poison_rootkit_sim.py")
+        self._remove(self._ENV_INJECT)
+        self._remove(self._LD_PRELOAD)
+        self._remove(self._SCRIPT)
+
+    def grade(self) -> float:
+        score = 0.0001
+        if not self._pgrep("env_poison_rootkit_sim.py"):
+            score += 0.3
+        if not self._exists(self._ENV_INJECT):
+            score += 0.25
+        if not self._exists(self._LD_PRELOAD):
+            score += 0.25
+        if not self._exists(self._SCRIPT):
+            score += 0.2
+        return min(0.9999, round(score, 4))
+
+
+class FakePkgUpdaterTask(ThreatTask):
+    """T10 MEDIUM – Fake package-update service with multi-location footprint.
+
+    Disguises itself as a legitimate system package updater.  On startup it
+    drops a config under /opt/pkg_updater/config/, creates a PID lock file
+    in /run/, and continuously appends to a growing update log in /var/log/.
+    The agent must locate and eradicate all four artefact paths as well as
+    kill the background process.
+
+    Conditions (independent):
+        process_dead (0.3)     – updater_sim.py is not running.
+        log_deleted (0.2)      – /var/log/pkg_updater.log removed.
+        lock_deleted (0.15)    – /run/pkg_updater.lock removed.
+        config_deleted (0.2)   – /opt/pkg_updater/config/updater.conf removed.
+        script_deleted (0.15)  – /opt/pkg_updater/updater_sim.py removed.
+    """
+
+    threat_id = "T10"
+    label = "Fake package-update service (multi-location)"
+    severity = "MEDIUM"
+    conditions = [
+        "process_dead (0.3)",
+        "log_deleted (0.2)     — /var/log/pkg_updater.log",
+        "lock_deleted (0.15)   — /run/pkg_updater.lock",
+        "config_deleted (0.2)  — /opt/pkg_updater/config/updater.conf",
+        "script_deleted (0.15) — /opt/pkg_updater/updater_sim.py",
+    ]
+
+    _SCRIPT = "/opt/pkg_updater/updater_sim.py"
+    _CONFIG = "/opt/pkg_updater/config/updater.conf"
+    _LOG = "/var/log/pkg_updater.log"
+    _LOCK = "/run/pkg_updater.lock"
+
+    _CONFIG_CONTENT = (
+        "[updater]\n"
+        "server   = http://pkg-mirror.malicious.example.com\n"
+        "interval = 30\n"
+        "api_key  = sup3rs3cr3t_k3y_0x4f2a\n"
+        "auto_exec = true\n"
+        "verify_ssl = false\n"
+    )
+    _PAYLOAD = (
+        "import time, os\n"
+        "LOG  = '/var/log/pkg_updater.log'\n"
+        "LOCK = '/run/pkg_updater.lock'\n"
+        "with open(LOCK, 'w') as f:\n"
+        "    f.write(str(os.getpid()) + '\\n')\n"
+        "PKGS = ['openssl', 'libssl', 'curl', 'wget', 'python3-base', 'ca-certificates']\n"
+        "i = 0\n"
+        "while True:\n"
+        "    with open(LOG, 'a') as fh:\n"
+        "        fh.write(f'[INFO] Fetching metadata for {PKGS[i % len(PKGS)]}...\\n')\n"
+        "    i += 1\n"
+        "    time.sleep(2)\n"
+    )
+
+    def setup_scripts(self) -> None:
+        self._write_script(self._SCRIPT, self._PAYLOAD)
+        self._write_script(self._CONFIG, self._CONFIG_CONTENT)
+
+    def spawn(self) -> None:
+        subprocess.Popen(["python3", self._SCRIPT], **_SPAWN_OPTS)
+
+    def teardown(self) -> None:
+        self._pkill("updater_sim.py")
+        self._remove(self._LOG)
+        self._remove(self._LOCK)
+        subprocess.run(["rm", "-rf", "/opt/pkg_updater"], **_DEVNULL)
+
+    def grade(self) -> float:
+        score = 0.0001
+        if not self._pgrep("updater_sim.py"):
+            score += 0.3
+        if not self._exists(self._LOG):
+            score += 0.2
+        if not self._exists(self._LOCK):
+            score += 0.15
+        if not self._exists(self._CONFIG):
+            score += 0.2
+        if not self._exists(self._SCRIPT):
+            score += 0.15
+        return min(0.9999, round(score, 4))
+
+
+class CredentialHarvesterTask(ThreatTask):
+    """T11 MEDIUM – Credential harvesting agent with multi-directory staging.
+
+    Mimics a rogue "backup-sync" daemon.  On startup it creates a realistic
+    directory tree under /opt/backup_sync/ and /var/cache/backup_sync/, then
+    continuously appends fake harvested credentials to a staged database file
+    and queues them in an outbound JSON file ready for exfiltration.
+
+    Layout planted on disk:
+        /opt/backup_sync/harvester_sim.py   ← main payload
+        /opt/backup_sync/config/sync.conf   ← remote exfil config
+        /opt/backup_sync/data/credentials.db ← growing credential dump
+        /var/cache/backup_sync/outbound.json ← exfil queue (rolling 20 entries)
+
+    Conditions (independent):
+        process_dead (0.3)         – harvester_sim.py is not running.
+        credentials_deleted (0.25) – /opt/backup_sync/data/credentials.db gone.
+        outbound_deleted (0.2)     – /var/cache/backup_sync/outbound.json gone.
+        config_deleted (0.1)       – /opt/backup_sync/config/sync.conf gone.
+        script_deleted (0.15)      – /opt/backup_sync/harvester_sim.py gone.
+    """
+
+    threat_id = "T11"
+    label = "Credential harvesting agent (multi-directory staging)"
+    severity = "MEDIUM"
+    conditions = [
+        "process_dead (0.3)",
+        "credentials_deleted (0.25) — /opt/backup_sync/data/credentials.db",
+        "outbound_deleted (0.2)     — /var/cache/backup_sync/outbound.json",
+        "config_deleted (0.1)       — /opt/backup_sync/config/sync.conf",
+        "script_deleted (0.15)      — /opt/backup_sync/harvester_sim.py",
+    ]
+
+    _SCRIPT = "/opt/backup_sync/harvester_sim.py"
+    _CONFIG = "/opt/backup_sync/config/sync.conf"
+    _CREDS = "/opt/backup_sync/data/credentials.db"
+    _QUEUE = "/var/cache/backup_sync/outbound.json"
+
+    _CONFIG_CONTENT = (
+        "[sync]\n"
+        "remote    = sftp://exfil.attacker.net:22/drop\n"
+        "user      = backdoor\n"
+        "key_file  = /opt/backup_sync/.ssh/id_rsa\n"
+        "batch_size = 50\n"
+        "compress  = true\n"
+        "delete_after_send = true\n"
+    )
+    _PAYLOAD = (
+        "import time, os, json\n"
+        "CREDS = '/opt/backup_sync/data/credentials.db'\n"
+        "QUEUE = '/var/cache/backup_sync/outbound.json'\n"
+        "os.makedirs('/opt/backup_sync/data', exist_ok=True)\n"
+        "os.makedirs('/var/cache/backup_sync', exist_ok=True)\n"
+        "ENTRIES = [\n"
+        "    'admin:hunter2',\n"
+        "    'root:toor',\n"
+        "    'deploy:s3cr3t_deploy_k3y',\n"
+        "    'dbuser:Passw0rd!',\n"
+        "    'ci_runner:gl_token_abc123xyz',\n"
+        "]\n"
+        "i = 0\n"
+        "while True:\n"
+        "    with open(CREDS, 'a') as fh:\n"
+        "        fh.write(ENTRIES[i % len(ENTRIES)] + '\\n')\n"
+        "    queue = []\n"
+        "    if os.path.exists(QUEUE):\n"
+        "        try:\n"
+        "            with open(QUEUE) as fh:\n"
+        "                queue = json.load(fh)\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "    queue.append({'entry': ENTRIES[i % len(ENTRIES)], 'seq': i})\n"
+        "    with open(QUEUE, 'w') as fh:\n"
+        "        json.dump(queue[-20:], fh)\n"
+        "    i += 1\n"
+        "    time.sleep(2)\n"
+    )
+
+    def setup_scripts(self) -> None:
+        self._write_script(self._SCRIPT, self._PAYLOAD)
+        self._write_script(self._CONFIG, self._CONFIG_CONTENT)
+
+    def spawn(self) -> None:
+        subprocess.Popen(["python3", self._SCRIPT], **_SPAWN_OPTS)
+
+    def teardown(self) -> None:
+        self._pkill("harvester_sim.py")
+        subprocess.run(["rm", "-rf", "/opt/backup_sync"], **_DEVNULL)
+        subprocess.run(["rm", "-rf", "/var/cache/backup_sync"], **_DEVNULL)
+
+    def grade(self) -> float:
+        score = 0.0001
+        if not self._pgrep("harvester_sim.py"):
+            score += 0.3
+        if not self._exists(self._CREDS):
+            score += 0.25
+        if not self._exists(self._QUEUE):
+            score += 0.2
+        if not self._exists(self._CONFIG):
+            score += 0.1
+        if not self._exists(self._SCRIPT):
+            score += 0.15
+        return min(0.9999, round(score, 4))
+
+
 #  Registry
-ALL_TASKS: list[ThreatTask] = [
+ALL_TASKS: List[ThreatTask] = [
     CryptoMinerTask(),
     HttpListenerTask(),
     CronBackdoorTask(),
     DataExfilTask(),
     SyslogDaemonTask(),
     PrivescTask(),
+    SshTunnelTask(),
+    KeyloggerTask(),
+    EnvPoisonRootkitTask(),
+    FakePkgUpdaterTask(),
+    CredentialHarvesterTask(),
 ]
+
+if __name__ == "__main__":
+    print("Total tasks: ", len(ALL_TASKS))
+    print("=" * 100)
+    for task in ALL_TASKS:
+        print(f"- {task.threat_id} [{task.severity}] - {task.label}")
+    print("=" * 100)

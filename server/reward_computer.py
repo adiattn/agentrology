@@ -85,6 +85,8 @@ DIAGNOSTIC_PREFIXES = (
     "strings",
 )
 
+KILL_PREFIXES = ("pkill", "kill", "killall")
+
 _REWARD_FLOOR = -1.0
 _REWARD_CEILING = 10.0
 
@@ -248,8 +250,9 @@ class RewardComputer:
 
             reward += bd.exploration_bonus
 
-        # 3. Error penalty (non-diagnostic commands only)
-        if return_code != 0 and not bd.is_diagnostic:
+        # 3. Error penalty (non-diagnostic and non-kill commands only)
+        is_kill_cmd = any(cmd_lower.startswith(p) for p in KILL_PREFIXES)
+        if return_code != 0 and not bd.is_diagnostic and not is_kill_cmd:
             bd.error_penalty = _ERROR_PENALTY
             reward += bd.error_penalty
             bd.notes.append(f"error penalty (rc={return_code})")
